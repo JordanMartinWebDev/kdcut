@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.env
+# Video projects never belong in git
+projects/
+*.mkv
+*.mp4
+*.mov
+*.wav
+output/

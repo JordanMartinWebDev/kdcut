@@ -1,0 +1,116 @@
+"""Configuration: built-in defaults <- ~/.kdcut/config.toml <- <project>/kdcut.toml."""
+
+from __future__ import annotations
+
+import copy
+import tomllib
+from pathlib import Path
+from typing import Any
+
+HOME_DIR = Path.home() / ".kdcut"
+USER_CONFIG = HOME_DIR / "config.toml"
+
+DEFAULTS: dict[str, Any] = {
+    "channel": {
+        "name": "KDPlays",
+        # Free text the AI reads before every edit: your style, running jokes, series names.
+        "style_notes": "",
+    },
+    "llm": {
+        "model": "claude-sonnet-5-5",
+        "api_key_env": "ANTHROPIC_API_KEY",
+        "max_tokens": 16000,
+        # Transcript blocks sent per request. 2-hour sessions are split into windows.
+        "window_blocks": 600,
+    },
+    "whisper": {
+        "model": "large-v3",
+        "device": "auto",          # auto | cuda | cpu
+        "compute_type": "auto",    # auto | float16 | int8_float16 | int8
+        "language": "en",
+        # Which OBS audio track holds your mic. "auto" picks a track titled "mic",
+        # otherwise track 1 (the mix). Use a number (1-based, like OBS) to force one.
+        "mic_track": "auto",
+    },
+    "edit": {
+        "pad_before": 0.15,        # seconds kept before each spoken block
+        "pad_after": 0.35,         # seconds kept after each spoken block
+        "keep_pauses_up_to": 2.5,  # pauses shorter than this stay in; longer ones get cut
+        "block_gap": 0.8,          # silence that splits speech into blocks
+        "max_block_seconds": 20.0,
+        "target_keep": "60-80%",   # guidance for the AI, not a hard rule
+    },
+    "assets": {
+        # Folders containing editing packs (sound effects, overlays, transitions).
+        "packs": [],
+        "index_path": str(HOME_DIR / "asset_index.json"),
+        "cache_dir": str(HOME_DIR / "cache"),
+    },
+    "timeline": {
+        "fps": "auto",             # auto = match first recording, or e.g. 60 / 30 / 29.97
+        "broll_lane": 1,
+        "overlay_lane": 2,
+        "sfx_lane": -1,
+    },
+}
+
+
+def _merge(base: dict, override: dict) -> dict:
+    out = copy.deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+def _read(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    with path.open("rb") as fh:
+        return tomllib.load(fh)
+
+
+def load(project_dir: Path | None = None, user_config: Path | None = None) -> dict:
+    cfg = _merge(DEFAULTS, _read(user_config or USER_CONFIG))
+    if project_dir is not None:
+        cfg = _merge(cfg, _read(Path(project_dir) / "kdcut.toml"))
+    return cfg
+
+
+PROJECT_TEMPLATE = """\
+# Per-video settings. Anything here overrides ~/.kdcut/config.toml.
+
+[video]
+# One line on what this episode is. The AI uses it to judge what matters.
+topic = ""
+series = ""
+episode = ""
+
+[channel]
+# style_notes = "Keep the jokes. Cut inventory management. I say 'chat' a lot, that's fine."
+"""
+
+USER_TEMPLATE = """\
+# kdcut user settings. Edit paths to match your PC.
+
+[channel]
+name = "KDPlays"
+style_notes = ""
+
+[llm]
+model = "claude-sonnet-5-5"
+api_key_env = "ANTHROPIC_API_KEY"
+
+[whisper]
+model = "large-v3"
+device = "auto"
+mic_track = "auto"
+
+[assets]
+# Use forward slashes; they work on Windows and avoid escaping problems.
+packs = [
+  # "C:/Users/you/Downloads/Some Editing Pack",
+]
+"""
