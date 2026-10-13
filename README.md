@@ -72,6 +72,13 @@ last week. Music goes on its own audio track at background volume (Quiet, Normal
 the cold open. Mood subfolders (`Calm`, `Tense`, `Upbeat`, `Funny`) help the AI choose; Epidemic's
 `ES_Track Name - Artist` filenames are read automatically.
 
+With **Lower the music while I talk** on (the default), KDcut pre-mixes one music bed that dips
+about 10 dB under your voice and comes back up in the gaps. Turn it off to get separate track clips
+you can swap in Resolve.
+
+Every build also writes `captions.srt`, timed to the edit. Resolve can import it as subtitles, and
+YouTube accepts it as captions.
+
 ## Letting the AI look at the footage
 
 With **Let the AI look at the footage** ticked, KDcut finds stretches where you weren't talking,
@@ -253,7 +260,7 @@ whole pipeline, including that every cut in the FCPXML lands on a whole frame.
 - [x] Thumbnails with a consistent style per series (character, icons, logo, episode badge)
 - [x] Optional footage check (the AI looks at frames from quiet stretches)
 - [x] Background music from your own licensed library, picked per section
-- [ ] Music ducking under your voice
+- [x] Music ducking under your voice
+- [x] Captions (.srt) timed to the edit
 - [ ] Upload to YouTube as private with the metadata filled in
 - [x] Desktop app with drag and drop, and a Windows installer built by GitHub Actions
-- [ ] Auto speed-ramp long wordless stretches into timelapses
