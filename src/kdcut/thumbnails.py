@@ -53,6 +53,7 @@ class Theme:
     edge_bar: bool = True
     logo: str = ""                # series logo PNG (transparent), shown bottom-left
     designed: bool = False        # False until the AI has picked colours and font
+    badge_style: str = "medallion"  # how the episode number looks: medallion | stamp | ribbon | tab
 
     @classmethod
     def load(cls, path: Path) -> "Theme | None":
@@ -335,38 +336,111 @@ def _arrow(draw: ImageDraw.ImageDraw, start, end, color, width: int = 26):
         draw.polygon(head, fill=col)
 
 
+BADGE_STYLES = ("medallion", "stamp", "ribbon", "tab")
+
+
+def _word(label: str, size: int, font_path: Path | None, fill, stroke, stroke_w: int) -> Image.Image:
+    """One piece of outlined text on a tight transparent canvas."""
+    fnt = _font(font_path, size)
+    box = fnt.getbbox(label, stroke_width=stroke_w)
+    im = Image.new("RGBA", (box[2] - box[0] + 4, box[3] - box[1] + 4), (0, 0, 0, 0))
+    ImageDraw.Draw(im).text((2 - box[0], 2 - box[1]), label, font=fnt, fill=fill,
+                            stroke_width=stroke_w, stroke_fill=stroke)
+    return im
+
+
+def _episode_mark(theme: Theme, episode, font_path: Path | None, ref_h: int) -> Image.Image:
+    """The episode number in the series' chosen style. ref_h is the logo height it sits with."""
+    n = str(episode)
+    white, dark = (255, 255, 255, 255), _hex(theme.stroke)
+    style = theme.badge_style if theme.badge_style in BADGE_STYLES else "medallion"
+    ss = 3   # draw big then shrink: crisp edges at any size
+
+    if style == "medallion":
+        d_px = int(ref_h * 1.35) * ss
+        im = Image.new("RGBA", (d_px, d_px), (0, 0, 0, 0))
+        g = ImageDraw.Draw(im)
+        g.ellipse([0, 0, d_px - 1, d_px - 1], fill=dark)
+        g.ellipse([d_px * .05, d_px * .05, d_px * .95, d_px * .95], fill=white)
+        g.ellipse([d_px * .11, d_px * .11, d_px * .89, d_px * .89], fill=_hex(theme.primary))
+        top = _word("EPISODE" if len(n) < 3 else "EP", int(d_px * .12), font_path, white, dark, max(2, d_px // 90))
+        big = _word(n, int(d_px * (.46 if len(n) < 3 else .34)), font_path, white, dark, max(4, d_px // 45))
+        im.alpha_composite(top, ((d_px - top.width) // 2, int(d_px * .20)))
+        im.alpha_composite(big, ((d_px - big.width) // 2, int(d_px * .36)))
+        im = im.rotate(8, expand=True, resample=Image.BICUBIC)
+    elif style == "stamp":
+        hash_ = _word("#", int(ref_h * .55) * ss, font_path, _hex(theme.accent), dark, 7 * ss)
+        num = _word(n, int(ref_h * .95) * ss, font_path, _hex(theme.accent), dark, 9 * ss)
+        im = Image.new("RGBA", (hash_.width + num.width, num.height), (0, 0, 0, 0))
+        im.alpha_composite(hash_, (0, int(num.height * .08)))
+        im.alpha_composite(num, (hash_.width - 4 * ss, 0))
+        im = im.rotate(-7, expand=True, resample=Image.BICUBIC)
+    elif style == "ribbon":
+        label = _word(f"EPISODE {n}", int(ref_h * .30) * ss, font_path, white, dark, 4 * ss)
+        h = int(label.height * 1.55)
+        fold = h // 2
+        w = label.width + fold * 4
+        im = Image.new("RGBA", (w, h + fold // 2), (0, 0, 0, 0))
+        g = ImageDraw.Draw(im)
+        shade = tuple(int(c * .6) for c in _hex(theme.primary)[:3]) + (255,)
+        # folded tails, then the band, with a dark outline
+        g.polygon([(0, fold // 2), (fold * 1.4, fold // 2), (fold * 1.4, h + fold // 2), (0, h + fold // 2),
+                   (fold * .7, fold // 2 + h / 2)], fill=shade, outline=dark, width=3 * ss)
+        g.polygon([(w, fold // 2), (w - fold * 1.4, fold // 2), (w - fold * 1.4, h + fold // 2),
+                   (w, h + fold // 2), (w - fold * .7, fold // 2 + h / 2)], fill=shade, outline=dark, width=3 * ss)
+        g.rectangle([fold, 0, w - fold, h], fill=_hex(theme.primary), outline=dark, width=4 * ss)
+        g.line([(fold + 8 * ss, 7 * ss), (w - fold - 8 * ss, 7 * ss)], fill=(255, 255, 255, 110), width=3 * ss)
+        im.alpha_composite(label, ((w - label.width) // 2, (h - label.height) // 2))
+    else:  # "tab": the simple rounded pill
+        label = _word(theme.badge.replace("{n}", n) if theme.badge else f"EP {n}",
+                      int(ref_h * .30) * ss, font_path, white, dark, 3 * ss)
+        pad_x, pad_y = label.height // 2 + 6 * ss, label.height // 4 + 4 * ss
+        im = Image.new("RGBA", (label.width + pad_x * 2, label.height + pad_y * 2), (0, 0, 0, 0))
+        ImageDraw.Draw(im).rounded_rectangle([0, 0, im.width - 1, im.height - 1], radius=im.height // 3,
+                                             fill=_hex(theme.primary), outline=white, width=4 * ss)
+        im.alpha_composite(label, (pad_x, pad_y))
+    if style != "medallion":
+        pass
+    f = 1 / ss if style != "medallion" else 1 / ss
+    return _resize(im, (max(1, int(im.width * f)), max(1, int(im.height * f))))
+
+
 def _brand(theme: Theme, episode, font_path: Path | None) -> Image.Image | None:
-    """Series logo with the episode tab tucked underneath it, as one unit."""
+    """Series logo + episode number as one unit, laid out per the series' badge style."""
     logo = None
     if theme.logo and Path(theme.logo).exists():
         logo = _rgba(Path(theme.logo))
         f = min(W * 0.30 / logo.width, H * 0.16 / logo.height)
         logo = _resize(logo, (max(1, int(logo.width * f)), max(1, int(logo.height * f))))
-    tab = None
-    if theme.badge and episode not in (None, ""):
-        label = theme.badge.replace("{n}", str(episode))
-        size = 40 if logo is not None else 58
-        fnt = _font(font_path, size)
-        box = fnt.getbbox(label, stroke_width=3)
-        tw, th = box[2] - box[0], box[3] - box[1]
-        pad_x, pad_y = int(size * 0.55), int(size * 0.3)
-        tab = Image.new("RGBA", (tw + pad_x * 2 + 10, th + pad_y * 2 + 10), (0, 0, 0, 0))
-        d = ImageDraw.Draw(tab)
-        d.rounded_rectangle([5, 5, tab.width - 5, tab.height - 5], radius=int(size * 0.35),
-                            fill=_hex(theme.primary), outline=(255, 255, 255, 255), width=5)
-        d.text((5 + pad_x - box[0], 5 + pad_y - box[1]), label, font=fnt, fill=_hex(theme.text),
-               stroke_width=3, stroke_fill=_hex(theme.stroke))
-    if logo is None and tab is None:
+    has_ep = bool(theme.badge) and episode not in (None, "")
+    if logo is None and not has_ep:
         return None
+    ref_h = logo.height if logo is not None else int(H * 0.15)
+    mark = _episode_mark(theme, episode, font_path, ref_h) if has_ep else None
     if logo is None:
-        unit = tab
-    elif tab is None:
+        unit = mark
+    elif mark is None:
         unit = logo
     else:
-        gap = 2
-        unit = Image.new("RGBA", (max(logo.width, tab.width), logo.height + gap + tab.height), (0, 0, 0, 0))
-        unit.alpha_composite(logo, ((unit.width - logo.width) // 2, 0))
-        unit.alpha_composite(tab, ((unit.width - tab.width) // 2, logo.height + gap))
+        style = theme.badge_style if theme.badge_style in BADGE_STYLES else "medallion"
+        if style == "medallion":      # sticker overlapping the logo's top-right corner
+            ox = logo.width - int(mark.width * 0.12)
+            unit = Image.new("RGBA", (ox + mark.width, logo.height + int(mark.height * 0.25)), (0, 0, 0, 0))
+            unit.alpha_composite(logo, (0, unit.height - logo.height))
+            unit.alpha_composite(mark, (ox, 0))
+        elif style == "stamp":        # big number beside the logo, slightly overlapping
+            ox = logo.width - int(mark.width * 0.12)
+            uh = max(logo.height, mark.height)
+            unit = Image.new("RGBA", (ox + mark.width, uh), (0, 0, 0, 0))
+            unit.alpha_composite(logo, (0, (uh - logo.height) // 2))
+            unit.alpha_composite(mark, (ox, (uh - mark.height) // 2))
+        else:                         # ribbon / tab underneath, centred
+            if style == "ribbon" and mark.width < logo.width * 0.9:
+                f = logo.width * 0.9 / mark.width
+                mark = _resize(mark, (int(mark.width * f), int(mark.height * f)))
+            unit = Image.new("RGBA", (max(logo.width, mark.width), logo.height + mark.height - 6), (0, 0, 0, 0))
+            unit.alpha_composite(logo, ((unit.width - logo.width) // 2, 0))
+            unit.alpha_composite(mark, ((unit.width - mark.width) // 2, logo.height - 6))
     return _outlined(unit, 0, shadow=10)
 
 
