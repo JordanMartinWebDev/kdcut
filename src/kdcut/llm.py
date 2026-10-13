@@ -16,7 +16,9 @@ class LLMError(RuntimeError):
 
 
 def api_key(cfg: dict) -> str | None:
-    return os.environ.get(cfg["llm"].get("api_key_env", "ANTHROPIC_API_KEY"))
+    """The key saved in the app's settings wins; otherwise the environment variable."""
+    return (cfg["llm"].get("api_key") or "").strip() or \
+        os.environ.get(cfg["llm"].get("api_key_env", "ANTHROPIC_API_KEY"))
 
 
 def call_tool(cfg: dict, system: str, user: str, tool_name: str, tool_description: str,
@@ -28,8 +30,8 @@ def call_tool(cfg: dict, system: str, user: str, tool_name: str, tool_descriptio
     key = api_key(cfg)
     if not key:
         raise LLMError(
-            f"No API key. Set the {cfg['llm'].get('api_key_env')} environment variable "
-            "(get a key at console.anthropic.com), or run with --no-ai."
+            "No Claude API key. Add one in Settings (get a key at console.anthropic.com), "
+            "or turn off the AI edit."
         )
     body = {
         "model": cfg["llm"]["model"],
@@ -68,3 +70,19 @@ def call_tool(cfg: dict, system: str, user: str, tool_name: str, tool_descriptio
     if payload.get("stop_reason") == "max_tokens":
         raise LLMError("The AI's answer was cut off (max_tokens). Lower llm.window_blocks.")
     raise LLMError("The AI did not return a structured answer.")
+
+
+def check_key(key: str) -> tuple[bool, str]:
+    """Quick validity check for the Settings window (lists models; costs nothing)."""
+    req = urllib.request.Request("https://api.anthropic.com/v1/models?limit=1", headers={
+        "x-api-key": key.strip(), "anthropic-version": "2023-06-01",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=20):
+            return True, "Key works."
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            return False, "That key was rejected. Copy it again from console.anthropic.com."
+        return False, f"The API answered with error {exc.code}. Try again in a minute."
+    except urllib.error.URLError as exc:
+        return False, f"Couldn't reach the Claude API ({exc.reason}). Check your internet."

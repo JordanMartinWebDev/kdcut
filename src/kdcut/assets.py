@@ -143,15 +143,15 @@ class AssetIndex:
 
     # -- persistence -------------------------------------------------------
     @classmethod
-    def build(cls, packs: list[Path]) -> "AssetIndex":
+    def build(cls, packs: list[Path], log=print) -> "AssetIndex":
         assets: list[Asset] = []
         for pack in packs:
             pack = Path(pack).expanduser()
             if not pack.is_dir():
-                print(f"  skipping missing pack folder: {pack}")
+                log(f"Skipping missing pack folder: {pack}")
                 continue
             got = scan_pack(pack)
-            print(f"  {pack.name}: {len(got)} usable files")
+            log(f"{pack.name}: {len(got)} usable files")
             assets.extend(got)
         return cls(assets)
 

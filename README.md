@@ -1,17 +1,39 @@
-# kdcut
+# KDcut
 
 AI-assisted editor for the **KDPlays** Minecraft channel.
 
-Record an hour or two in OBS, drop the files in a folder, and run one command. kdcut gives you a
+Drag your OBS recordings into the window and click **Edit my video**. KDcut gives you back a
 **DaVinci Resolve timeline** that's already cut, with B-roll, sound effects, pop-up graphics and
-chapter markers placed on their own tracks. You review it, tweak it, and export.
+chapter markers placed on their own tracks. It also writes titles, a description and chapters for
+YouTube. You review the timeline in Resolve, tweak it, and export.
 
-```
-recordings/ (1-2 hr raw)  ──►  kdcut build  ──►  Episode.fcpxml   (open in Resolve)
-broll/      (Flashback)                          review.md         (what was cut and why)
-                                                 upload_kit.md     (titles, description, chapters, tags)
-                                                 thumbnail_frames/ (candidate frames)
-```
+## Install
+
+1. **[Download KDcut-Setup.exe](https://github.com/JordanMartinWebDev/kdcut/releases/latest/download/KDcut-Setup.exe)** and run it.
+   Windows may say *"Windows protected your PC"* because the app isn't code-signed. Click
+   **More info → Run anyway**.
+2. The first time KDcut opens, it asks for two things:
+   - your **Claude API key** (from [console.anthropic.com](https://console.anthropic.com/settings/keys)), and
+   - your **editing pack folders**, which it indexes once.
+3. If you have an NVIDIA GPU, click **Download GPU support** in Settings (one time, about 1 GB)
+   so transcription runs on the GPU.
+
+The first video also downloads the speech-recognition model, about 3 GB and one time only.
+After that, the only thing that leaves your PC is transcript text sent to Claude.
+
+## Making a video
+
+1. Type a **name** and a line about **what happens** in the video.
+2. Drag your **recordings** into the left box. You can add one or several sessions; they're
+   sorted by filename, which matches OBS's date-time naming. Drag to reorder.
+3. Optionally, drag **B-roll** (Flashback renders, timelapses) into the right box. Name files
+   after what they show, e.g. `castle-walls-timelapse.mp4`, so the AI knows where to put them.
+4. Click **Edit my video**. When it finishes, click **How to open in Resolve**, then import the
+   `.fcpxml` with **File > Import > Timeline**.
+
+Each video gets its own folder in `Videos\KDcut\<name>` containing the timeline, `review.md`
+(every cut and why), `upload_kit.md` (titles, description, chapters, tags) and thumbnail frame
+candidates. Re-running the same video is fast because the transcript and the AI's decisions are saved.
 
 ## How it works
 
@@ -51,9 +73,9 @@ matching file. Overlays are prepared for Resolve automatically:
 
 Converted files are cached in `~/.kdcut/cache`, so each one is only converted once.
 
-## Install (Windows)
+## Developer setup (command line)
 
-You need Python 3.11+, ffmpeg and DaVinci Resolve (the free version works).
+Only needed to work on KDcut itself. You need Python 3.11+ and ffmpeg.
 
 ```powershell
 winget install Python.Python.3.12
@@ -98,7 +120,7 @@ kdcut doctor                   # everything should say OK
 
 The first transcription downloads the Whisper model (~3 GB, one time).
 
-## Making a video
+### Command-line usage
 
 ```powershell
 kdcut init "D:\KDPlays\Hardcore Ep 12"
@@ -130,7 +152,7 @@ Edit that file by hand and rebuild, or use `--replan` for a fresh AI pass.
 
 - **Put your mic on its own audio track.** In Settings > Output > Recording, enable tracks 1 and 2.
   In Edit > Advanced Audio Properties, set the mic to tracks 1+2 and game/desktop audio to track 1 only.
-  Then set `mic_track = 2` under `[whisper]` in your config. Transcription is much more accurate
+  Then choose **Track 2** under Settings → Mic audio track. Transcription is much more accurate
   without game audio mixed in.
 - MKV or MP4 both work. MKV is safer because it survives crashes. If Resolve has trouble with
   one, use OBS's File > Remux Recordings.
@@ -166,9 +188,14 @@ current pricing.
 ## Development
 
 ```bash
-pip install -e .
+pip install -e ".[app]"
+kdcut-app                                 # run the desktop app from source
 python -m unittest discover -s tests -v   # needs ffmpeg; no GPU or API key required
 ```
+
+Every push to `main` runs the tests on Linux and Windows, builds the app with PyInstaller,
+self-tests the built `.exe` (window, bundled ffmpeg, Whisper, and an end-to-end edit), wraps it in an
+Inno Setup installer, and publishes it as the latest release. See `.github/workflows/build.yml`.
 
 `tests/test_e2e.py` builds synthetic recordings, a fake editing pack and a fake AI, then checks the
 whole pipeline, including that every cut in the FCPXML lands on a whole frame.
@@ -180,5 +207,5 @@ whole pipeline, including that every cut in the FCPXML lands on a whole frame.
 - [x] B-roll placement, chapters, titles, description, thumbnail frames
 - [ ] Thumbnail compositing (frame + your face + big text)
 - [ ] Upload to YouTube as private with the metadata filled in
-- [ ] Desktop app window (drag and drop instead of the command line)
+- [x] Desktop app with drag and drop, and a Windows installer built by GitHub Actions
 - [ ] Auto speed-ramp long wordless stretches into timelapses

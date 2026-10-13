@@ -188,7 +188,7 @@ ToolCaller = Callable[..., dict]
 
 def make_plan(blocks: list[Block], recordings: list[Path], cfg: dict, video: dict,
               broll: list[tuple[str, float]], vocab: dict[str, list[str]],
-              caller: ToolCaller = llm.call_tool) -> Plan:
+              caller: ToolCaller = llm.call_tool, log=print) -> Plan:
     window = max(int(cfg["llm"].get("window_blocks", 600)), 50)
     valid = {b.id for b in blocks}
     by_id = {b.id: b for b in blocks}
@@ -202,7 +202,7 @@ def make_plan(blocks: list[Block], recordings: list[Path], cfg: dict, video: dic
             continue
         start = blocks.index(chunk[0])
         context = blocks[max(0, start - 15):start]
-        print(f"  AI edit pass {w_idx + 1}/{len(windows)} ({len(chunk)} blocks) ...")
+        log(f"AI edit pass {w_idx + 1}/{len(windows)} ({len(chunk)} blocks)")
         remaining_broll = [(n, d) for n, d in broll if n not in used_broll]
         result = caller(
             cfg, sys_prompt,

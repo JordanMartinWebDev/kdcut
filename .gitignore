@@ -13,3 +13,6 @@ projects/
 *.mov
 *.wav
 output/
+packaging/ffmpeg/
+selftest.json
+*.spec.bak

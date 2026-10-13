@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "llm": {
         "model": "claude-sonnet-5-5",
+        "api_key": "",            # set from the app's Settings window
         "api_key_env": "ANTHROPIC_API_KEY",
         "max_tokens": 16000,
         # Transcript blocks sent per request. 2-hour sessions are split into windows.
@@ -46,6 +48,9 @@ DEFAULTS: dict[str, Any] = {
         "index_path": str(HOME_DIR / "asset_index.json"),
         "cache_dir": str(HOME_DIR / "cache"),
     },
+    "app": {
+        "projects_dir": str(Path.home() / "Videos" / "KDcut"),
+    },
     "timeline": {
         "fps": "auto",             # auto = match first recording, or e.g. 60 / 30 / 29.97
         "broll_lane": 1,
@@ -72,8 +77,31 @@ def _read(path: Path) -> dict:
         return tomllib.load(fh)
 
 
-def load(project_dir: Path | None = None, user_config: Path | None = None) -> dict:
+SETTINGS_FILE = HOME_DIR / "settings.json"
+
+
+def load_settings(path: Path | None = None) -> dict:
+    """Settings saved by the desktop app (same shape as the config sections)."""
+    path = path or SETTINGS_FILE
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_settings(settings: dict, path: Path | None = None) -> None:
+    path = path or SETTINGS_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def load(project_dir: Path | None = None, user_config: Path | None = None,
+         settings_file: Path | None = None) -> dict:
+    """defaults <- ~/.kdcut/config.toml <- app settings.json <- <project>/kdcut.toml"""
     cfg = _merge(DEFAULTS, _read(user_config or USER_CONFIG))
+    cfg = _merge(cfg, load_settings(settings_file))
     if project_dir is not None:
         cfg = _merge(cfg, _read(Path(project_dir) / "kdcut.toml"))
     return cfg

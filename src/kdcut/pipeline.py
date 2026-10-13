@@ -1,6 +1,8 @@
-"""End to end: project folder of raw recordings -> Resolve timeline + review notes + upload kit.
+"""End to end: raw recordings -> Resolve timeline + review notes + upload kit.
 
-Project folder layout (created by `kdcut init`):
+Used by both the desktop app (explicit file lists, progress callbacks) and the command line.
+
+Command-line project folder layout (created by `kdcut init`):
 
     MyEpisode/
       recordings/   raw OBS sessions, in recording order (MKV or MP4)
@@ -11,6 +13,7 @@ Project folder layout (created by `kdcut init`):
 
 from __future__ import annotations
 
+import json
 import tomllib
 from pathlib import Path
 
@@ -37,60 +40,119 @@ def find_recordings(project: Path) -> list[Path]:
     return recs
 
 
+class Cancelled(Exception):
+    pass
+
+
+class Reporter:
+    """Progress sink. The command line prints; the desktop app overrides these."""
+
+    STEPS = ["Reading recordings", "Transcribing", "AI edit", "Building timeline", "Writing notes"]
+
+    def step(self, index: int, label: str) -> None:
+        print(f"[{index + 1}/{len(self.STEPS)}] {label}")
+
+    def progress(self, fraction: float) -> None:
+        pass
+
+    def log(self, message: str) -> None:
+        print(f"  {message}")
+
+    def cancelled(self) -> bool:
+        return False
+
+    def check(self) -> None:
+        if self.cancelled():
+            raise Cancelled()
+
+
 def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = False,
-        replan: bool = False, caller=None) -> dict:
+        replan: bool = False, caller=None, *, recordings: list[Path] | None = None,
+        broll_files: list[Path] | None = None, video: dict | None = None,
+        out_dir: Path | None = None, reporter: Reporter | None = None) -> dict:
+    """Edit one video.
+
+    Command line: pass just `project` (folder with recordings/ and broll/).
+    Desktop app: pass explicit `recordings`, `broll_files`, `video` and `out_dir`.
+    """
+    r = reporter or Reporter()
     project = Path(project).resolve()
-    out = project / "output"
+    out = Path(out_dir) if out_dir else project / "output"
     out.mkdir(parents=True, exist_ok=True)
     work = out / ".work"
-    video = _video_settings(project)
+    video = dict(video) if video is not None else _video_settings(project)
     call = caller or planner.llm.call_tool
 
     # 1. Recordings -----------------------------------------------------------------
+    r.step(0, "Reading recordings")
     media.require_ffmpeg()
-    recordings = find_recordings(project)
+    recordings = [Path(p) for p in recordings] if recordings else find_recordings(project)
     if not recordings:
-        raise SystemExit(f"No recordings found. Put your OBS files in {project / 'recordings'}")
-    infos = [media.probe(r) for r in recordings]
-    print(f"[1/5] {len(recordings)} recording(s), "
-          f"{sum(i.duration for i in infos) / 60:.1f} minutes total")
+        raise RuntimeError(f"No recordings found. Put your OBS files in {project / 'recordings'}")
+    infos = [media.probe(p) for p in recordings]
+    r.log(f"{len(recordings)} recording(s), {sum(i.duration for i in infos) / 60:.1f} minutes total")
     fps = media.parse_fps(cfg["timeline"].get("fps")) or media.normalize_fps(infos[0].fps)
     width, height = infos[0].width or 1920, infos[0].height or 1080
 
     # 2. Transcribe -----------------------------------------------------------------
-    print("[2/5] Transcribing")
-    words = [transcribe.transcribe_file(r, cfg, work, force=retranscribe) for r in recordings]
+    r.check()
+    r.step(1, "Transcribing")
+    total_secs = sum(i.duration for i in infos) or 1.0
+    done_secs = 0.0
+    words = []
+    for rec, info in zip(recordings, infos):
+        base = done_secs
+
+        def on_progress(f, base=base, dur=info.duration):
+            r.progress(min((base + f * dur) / total_secs, 1.0))
+            r.check()
+
+        words.append(transcribe.transcribe_file(rec, cfg, work, force=retranscribe,
+                                                on_progress=on_progress, log=r.log))
+        done_secs += info.duration
     ed = cfg["edit"]
     blocks = blocks_mod.build_blocks(words, gap=float(ed["block_gap"]),
                                      max_seconds=float(ed["max_block_seconds"]))
     cues = [b for b in blocks if b.cue]
-    print(f"  {len(blocks)} speech blocks, {len(cues)} spoken cue(s)")
+    r.log(f"{len(blocks)} speech blocks, {len(cues)} spoken cue(s)")
     (out / "transcript.txt").write_text(
         planner.format_blocks(blocks, recordings), encoding="utf-8")
 
     # 3. Plan -----------------------------------------------------------------------
     index = AssetIndex.load(Path(cfg["assets"]["index_path"]))
-    broll_files = media.list_media(project / "broll", media.VIDEO_EXTS | media.IMAGE_EXTS)
-    broll = [(p.name, media.probe(p).duration or 5.0) for p in broll_files]
+    r.check()
+    if broll_files is None:
+        broll_files = media.list_media(project / "broll", media.VIDEO_EXTS | media.IMAGE_EXTS)
+    broll_by_name: dict[str, Path] = {}
+    for p in map(Path, broll_files):
+        name = p.name
+        n = 2
+        while name in broll_by_name:          # same filename from two folders
+            name = f"{p.stem} ({n}){p.suffix}"
+            n += 1
+        broll_by_name[name] = p
+    broll = [(n, media.probe(p).duration or 5.0) for n, p in broll_by_name.items()]
     plan_file = out / "plan.json"
     if plan_file.is_file() and not replan and not retranscribe:
-        print("[3/5] Reusing existing plan.json (use --replan for a fresh AI edit)")
+        r.step(2, "AI edit (reusing saved plan)")
         plan = Plan.load(plan_file)
     elif use_ai:
-        print("[3/5] AI edit")
+        r.step(2, "AI edit")
         vocab = {}
         if index:
             vocab = {"sound effect": index.vocabulary("sfx", 100),
                      "overlay": index.vocabulary("overlay", 100)}
-        plan = planner.make_plan(blocks, recordings, cfg, video, broll, vocab, caller=call)
+        plan = planner.make_plan(blocks, recordings, cfg, video, broll, vocab, caller=call,
+                                 log=r.log)
         plan.save(plan_file)
     else:
-        print("[3/5] No-AI mode: applying spoken cues and trimming pauses only")
+        r.step(2, "Quick edit (spoken cues and pauses only)")
         plan = planner.plan_without_ai(blocks)
         plan.save(plan_file)
 
     # 4. Timeline -------------------------------------------------------------------
-    print("[4/5] Building timeline")
+    r.check()
+    r.step(3, "Building timeline")
     name = video.get("title") or project.name
     tl, starts, ends = build(name, recordings, blocks, plan, fps, width, height,
                              [i.duration for i in infos], ed)
@@ -108,8 +170,8 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
 
     for item in plan.broll:
         rec = anchor(item["at"])
-        path = project / "broll" / item["file"]
-        if rec is None or not path.exists():
+        path = broll_by_name.get(item["file"])
+        if rec is None or path is None or not path.exists():
             continue
         info = media.probe(path)
         max_len = info.duration if info.duration > 0 else float(item.get("duration", 5))
@@ -132,6 +194,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             if rec is None or asset is None:
                 review.append(f"  (no overlay matched '{item['query']}')")
                 continue
+            r.check()
             path, how = media.prepare_overlay(Path(asset.path), cache)
             info = media.probe(path)
             want = float(item.get("duration", 3.0))
@@ -163,7 +226,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             placed["sfx"] += 1
             review.append(f"{fmt_ts(tl.seconds(rec))}  SFX '{item['query']}' -> {asset.name}")
     elif plan.overlays or plan.sfx:
-        review.append("  (asset index missing: run `kdcut index-assets` to get SFX and overlays)")
+        review.append("  (no editing packs indexed yet, so SFX and overlays were skipped)")
 
     chapter_times: list[tuple[float, str]] = []
     for c in plan.chapters:
@@ -179,7 +242,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     xml_path = fcpxml.write(tl, out / f"{stem}.fcpxml", event=cfg["channel"].get("name") or "kdcut")
 
     # 5. Review notes + upload kit ----------------------------------------------------
-    print("[5/5] Writing review notes")
+    r.step(4, "Writing notes")
     raw_total = sum(i.duration for i in infos)
     final = tl.seconds(tl.duration)
     by_id = {b.id: b for b in blocks}
@@ -218,7 +281,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         try:
             md = metadata.generate(cfg, video, kept_blocks, caller=call)
         except Exception as exc:  # metadata is a bonus; never lose the timeline over it
-            print(f"  metadata skipped: {exc}")
+            r.log(f"metadata skipped: {exc}")
         for n, bid in enumerate(md.thumbnail_moments[:5], 1):
             b = by_id.get(bid)
             if not b:
@@ -230,13 +293,17 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             except media.MediaError:
                 pass
     (out / "upload_kit.md").write_text(metadata.to_markdown(md, yt_chapters, kit_frames), encoding="utf-8")
+    chapters_text = "\n".join(f"{fmt_ts(t)} {title}" for t, title in yt_chapters)
+    (out / "upload_kit.json").write_text(json.dumps({
+        "titles": md.titles, "description": md.description, "chapters": chapters_text,
+        "tags": md.tags, "thumbnail_text": md.thumbnail_text,
+    }, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    print(f"\nDone. Raw {fmt_ts(raw_total)} -> edit {fmt_ts(final)}")
-    print(f"  timeline:   {xml_path}")
-    print(f"  review:     {out / 'review.md'}")
-    print(f"  upload kit: {out / 'upload_kit.md'}")
+    r.log(f"Done. Raw {fmt_ts(raw_total)} -> edit {fmt_ts(final)}")
+    r.log(f"timeline:   {xml_path}")
     return {"timeline": xml_path, "final_seconds": final, "raw_seconds": raw_total,
-            "placed": placed, "plan": plan, "clips": len(tl.main)}
+            "placed": placed, "plan": plan, "clips": len(tl.main), "out_dir": out,
+            "review": out / "review.md", "upload_kit": out / "upload_kit.md"}
 
 
 def _safe(name: str) -> str:
