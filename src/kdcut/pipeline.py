@@ -22,7 +22,7 @@ from kdcut import fcpxml, media, metadata, planner, transcribe
 from kdcut.assets import AssetIndex
 from kdcut.blocks import fmt_ts
 from kdcut.planner import Plan
-from kdcut.timeline import Clip, Marker, _Lanes, build, nearest_kept
+from kdcut.timeline import Clip, Marker, _Lanes, build, cold_open_range, kept_ranges, nearest_kept
 
 
 def _video_settings(project: Path) -> dict:
@@ -150,17 +150,67 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         plan = planner.plan_without_ai(blocks)
         plan.save(plan_file)
 
+    # Packaging (titles, description, cold open) needs the whole kept story, so it is
+    # decided now, before the timeline is built. Cached alongside plan.json.
+    by_id = {b.id: b for b in blocks}
+    durations = [i.duration for i in infos]
+    kept_ids = [bid for rng in kept_ranges(blocks, plan, durations, ed) for bid in rng.block_ids]
+    want_cold_open = bool(video.get("cold_open", ed.get("cold_open", True)))
+    md_file = out / "metadata.json"
+    md = metadata.Metadata()
+    if use_ai:
+        cached = json.loads(md_file.read_text(encoding="utf-8")) if md_file.is_file() else {}
+        if (cached and cached.pop("_cold_open_requested", None) == want_cold_open
+                and md_file.stat().st_mtime >= plan_file.stat().st_mtime):
+            md = metadata.Metadata(**cached)
+        else:
+            r.log("Writing titles and description" + (", picking a cold open" if want_cold_open else ""))
+            try:
+                md = metadata.generate(cfg, video, [by_id[i] for i in kept_ids], caller=call,
+                                       cold_open=want_cold_open)
+                md_file.write_text(json.dumps({**md.__dict__, "_cold_open_requested": want_cold_open},
+                                              indent=2, ensure_ascii=False), encoding="utf-8")
+            except Exception as exc:  # packaging is a bonus; never lose the timeline over it
+                r.log(f"titles/description skipped: {exc}")
+    if not want_cold_open:
+        md.cold_open = None
+    elif md.cold_open is None:
+        # No AI pick: fall back to the first "clip that" moment, if there is one.
+        hl = next((by_id[i] for i in kept_ids if "highlight" in by_id[i].flags), None)
+        if hl is not None:
+            md.cold_open = {"id": hl.id, "seconds": 6, "reason": "you said 'clip that'"}
+    prefix = None
+    if md.cold_open and md.cold_open.get("id") in by_id:
+        cb = by_id[md.cold_open["id"]]
+        prefix = cold_open_range(cb, md.cold_open.get("seconds", 6), durations[cb.source])
+
     # 4. Timeline -------------------------------------------------------------------
     r.check()
     r.step(3, "Building timeline")
     name = video.get("title") or project.name
     tl, starts, ends = build(name, recordings, blocks, plan, fps, width, height,
-                             [i.duration for i in infos], ed)
+                             durations, ed, prefix=prefix)
     lanes = _Lanes()
     tcfg = cfg["timeline"]
     cache = Path(cfg["assets"]["cache_dir"]).expanduser() / "converted"
     review: list[str] = []
     placed = {"broll": 0, "overlay": 0, "sfx": 0}
+    teaser = tl.main[0] if tl.main and tl.main[0].role == "cold_open" else None
+    if teaser:
+        cb = by_id[md.cold_open["id"]]
+        tl.markers.append(Marker(rec=0, name="Cold open (teaser)", kind="note"))
+        review.append(f"0:00  Cold open: {tl.seconds(teaser.dur):.0f}s teaser from rec {cb.source + 1} @ "
+                      f"{fmt_ts(cb.start)}  \"{_short(cb.text, 60)}\""
+                      + (f"  ({md.cold_open['reason']})" if md.cold_open.get("reason") else ""))
+        if index:
+            whoosh = index.best("whoosh", "sfx") or index.best("swoosh", "sfx")
+            if whoosh:
+                wdur = tl.frames(min(media.probe(Path(whoosh.path)).duration or 1.0, 3.0))
+                rec_w = max(teaser.rec_end - wdur // 2, 0)
+                tl.connected.append(Clip(path=Path(whoosh.path), src_in=0, dur=wdur, rec=rec_w,
+                                         lane=lanes.place(int(tcfg["sfx_lane"]), rec_w, wdur),
+                                         enable="audio", role="sfx", name=whoosh.name))
+                placed["sfx"] += 1
 
     def anchor(bid: str, at_end: bool = False) -> int | None:
         k = nearest_kept(bid, blocks, starts)
@@ -245,7 +295,6 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     r.step(4, "Writing notes")
     raw_total = sum(i.duration for i in infos)
     final = tl.seconds(tl.duration)
-    by_id = {b.id: b for b in blocks}
     cut_lines = []
     for bid, reason in plan.drop.items():
         b = by_id.get(bid)
@@ -275,13 +324,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
 
     yt_chapters = metadata.youtube_chapters(chapter_times, final)
     kit_frames: list[str] = []
-    md = metadata.Metadata()
     if use_ai:
-        kept_blocks = [b for b in blocks if b.id in starts]
-        try:
-            md = metadata.generate(cfg, video, kept_blocks, caller=call)
-        except Exception as exc:  # metadata is a bonus; never lose the timeline over it
-            r.log(f"metadata skipped: {exc}")
         for n, bid in enumerate(md.thumbnail_moments[:5], 1):
             b = by_id.get(bid)
             if not b:

@@ -64,6 +64,7 @@ class FakeAI:
             "tags": ["minecraft", "castle"],
             "thumbnail_text": ["DIAMONDS!"],
             "thumbnail_moments": ["B0006"],
+            "cold_open": {"id": "B0006", "seconds": 4, "reason": "diamonds reaction"},
         }
 
 
@@ -212,6 +213,17 @@ class EndToEnd(unittest.TestCase):
            "-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le", str(src))
         out, how = media.prepare_overlay(src, self.tmp / "keycache")
         self.assertEqual((out, how), (src, "as-is"))
+
+    def test_cold_open_is_first_and_retention_rules_sent(self):
+        root = ET.fromstring(self.xml.split("<!DOCTYPE fcpxml>", 1)[1])
+        first = root.find(".//sequence/spine")[0]
+        self.assertTrue(first.get("name").startswith("Cold open"))
+        self.assertEqual(first.get("duration"), "240/60s")       # 4 seconds
+        self.assertEqual(first.get("start"), f"{round((25.0 - 0.15) * 60)}/60s")  # from the diamonds block
+        self.assertIn("Cold open: 4s teaser", self.review)
+        system_prompts = [c for c in self.ai.calls if c[0] == "submit_metadata"]
+        self.assertIn("cold open", system_prompts[0][1])
+        self.assertIn("[HIGHLIGHT]", system_prompts[0][1])
 
     def test_rerun_reuses_plan_without_ai(self):
         ai = FakeAI()

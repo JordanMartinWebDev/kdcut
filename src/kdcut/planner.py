@@ -120,6 +120,20 @@ def system_prompt(cfg: dict, video: dict) -> str:
         "made of words from the vocabulary lists.",
         "- Chapters: 3-12 chapters for long videos, titled in the creator's voice.",
         "- Only use block ids that appear in the transcript.",
+        "",
+        "Keep viewers watching (YouTube retention):",
+        "- The first 30 seconds decide whether people stay. Get to the point fast: keep a quick "
+        "greeting, but cut long 'hey guys, welcome back, hope you're all doing well' warm-ups, "
+        "recaps nobody needs, and housekeeping (settings, mods, sponsors) before the action.",
+        "- Within the first minute the viewer should know what this video is about and why it's "
+        "worth watching (the goal, the challenge, the stakes). Keep the line where that is said.",
+        "- Be tighter in the first 3-5 minutes than later on; that's where most viewers leave.",
+        "- Every few minutes something should change: a new goal, a discovery, danger, a joke, "
+        "a reveal. Cut stretches where nothing changes and nothing is set up.",
+        "- Keep set-ups that pay off later, and always keep the payoff and the reaction to it.",
+        "- After the climax or the goodbye, end quickly. Cut long outros; keep one short sign-off.",
+        "- Never cut the creator's personality to save time. Jokes and reactions are why people "
+        "subscribe to a let's-play.",
     ]
     if ch.get("style_notes"):
         lines += ["", "Creator's own style notes:", ch["style_notes"]]

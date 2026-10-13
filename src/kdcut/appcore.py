@@ -132,5 +132,6 @@ RESOLVE_STEPS = (
     "3. Pick the .fcpxml file in this video's folder.\n"
     "4. If Resolve asks about settings, keep the timeline's settings.\n\n"
     "B-roll is on track V2, overlays on V3, sound effects on A2. Chapter markers are on the "
-    "timeline. Check review.md for what was cut."
+    "timeline. If there's a cold open, it's the first clip; delete it if you don't like it. "
+    "Check review.md for what was cut."
 )

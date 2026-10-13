@@ -580,9 +580,14 @@ class MainWindow(QMainWindow):
         opts = QHBoxLayout()
         self.use_ai = QCheckBox("AI edit (cuts, B-roll, sounds, overlays, titles)")
         self.use_ai.setChecked(True)
+        self.cold_open = QCheckBox("Start with a teaser")
+        self.cold_open.setToolTip("Cold open: a few seconds of the best moment before the intro, to hook viewers.")
+        self.cold_open.setChecked(bool(config.load()["edit"].get("cold_open", True)))
         self.fresh = QCheckBox("Start over (redo transcription and AI edit)")
         self.fresh.setToolTip("Normally re-running keeps the transcript and the AI's decisions so it's fast.")
         opts.addWidget(self.use_ai)
+        opts.addSpacing(20)
+        opts.addWidget(self.cold_open)
         opts.addSpacing(20)
         opts.addWidget(self.fresh)
         opts.addStretch(1)
@@ -748,7 +753,7 @@ class MainWindow(QMainWindow):
 
         fresh, use_ai = self.fresh.isChecked(), self.use_ai.isChecked()
         reporter = QtReporter(self.bridge, self.stop)
-        video = {"title": proj.name, "topic": proj.topic}
+        video = {"title": proj.name, "topic": proj.topic, "cold_open": self.cold_open.isChecked()}
 
         def work():
             return pipeline.run(out, cfg, use_ai=use_ai, retranscribe=fresh, replan=fresh,

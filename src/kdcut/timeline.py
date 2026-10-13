@@ -63,6 +63,12 @@ class Timeline:
         return float(Fraction(frames) / self.fps)
 
 
+def cold_open_range(block: Block, seconds: float, duration: float) -> Range:
+    seconds = min(max(float(seconds), 3.0), 12.0)
+    start = max(block.start - 0.15, 0.0)
+    return Range(block.source, start, min(start + seconds, duration), [block.id])
+
+
 def kept_ranges(blocks: list[Block], plan: Plan, durations: list[float], edit: dict) -> list[Range]:
     pad_b = float(edit.get("pad_before", 0.15))
     pad_a = float(edit.get("pad_after", 0.35))
@@ -124,14 +130,25 @@ class _Lanes:
 
 
 def build(name: str, recordings: list[Path], blocks: list[Block], plan: Plan,
-          fps: Fraction, width: int, height: int, durations: list[float], edit: dict) -> tuple[Timeline, dict[str, int], dict[str, int]]:
+          fps: Fraction, width: int, height: int, durations: list[float], edit: dict,
+          prefix: Range | None = None) -> tuple[Timeline, dict[str, int], dict[str, int]]:
     """Lay out the main story. Returns the timeline plus block-id -> timeline frame maps
-    for the start and end of every kept block (used to place B-roll, SFX, chapters)."""
+    for the start and end of every kept block (used to place B-roll, SFX, chapters).
+
+    `prefix` is an optional cold open: a short teaser copied from later in the video and
+    placed before everything else."""
     tl = Timeline(name=name, fps=fps, width=width, height=height)
     by_id = {b.id: b for b in blocks}
     starts: dict[str, int] = {}
     ends: dict[str, int] = {}
     rec = 0
+    if prefix is not None:
+        src_in = tl.frames(prefix.start)
+        dur = tl.frames(prefix.end) - src_in
+        if dur > 0:
+            tl.main.append(Clip(path=recordings[prefix.source], src_in=src_in, dur=dur, rec=0,
+                                role="cold_open", name=f"Cold open - {recordings[prefix.source].stem}"))
+            rec = dur
     for r in kept_ranges(blocks, plan, durations, edit):
         src_in = tl.frames(r.start)
         dur = tl.frames(r.end) - src_in

@@ -41,6 +41,7 @@ DEFAULTS: dict[str, Any] = {
         "block_gap": 0.8,          # silence that splits speech into blocks
         "max_block_seconds": 20.0,
         "target_keep": "60-80%",   # guidance for the AI, not a hard rule
+        "cold_open": True,         # start with a short teaser of the best moment
     },
     "assets": {
         # Folders containing editing packs (sound effects, overlays, transitions).
