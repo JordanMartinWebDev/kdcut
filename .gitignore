@@ -15,4 +15,5 @@ projects/
 output/
 packaging/ffmpeg/
 selftest.json
+src/kdcut/_build.py
 *.spec.bak

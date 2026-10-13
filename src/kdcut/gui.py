@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from kdcut import __version__, appcore, config, gpu, llm, media, pipeline
+from kdcut import __version__, appcore, config, gpu, llm, media, pipeline, updater
 from kdcut.assets import AssetIndex
 
 APP_NAME = "KDcut"
@@ -444,6 +444,19 @@ class SettingsDialog(QDialog):
         prj.addWidget(browse)
         form.addRow("Save videos in", prj)
 
+        self.auto_update = QCheckBox("Check for updates when KDcut starts")
+        self.auto_update.setChecked(bool(cfg["app"].get("check_updates", True)))
+        check_now = QPushButton("Check now")
+        check_now.clicked.connect(lambda: parent.check_for_updates(quiet=False)
+                                  if parent is not None and hasattr(parent, "check_for_updates") else None)
+        urow = QHBoxLayout()
+        urow.addWidget(label(f"Version {updater.current_version()}", "hint", wrap=False))
+        urow.addSpacing(12)
+        urow.addWidget(self.auto_update)
+        urow.addStretch(1)
+        urow.addWidget(check_now)
+        form.addRow("Updates", urow)
+
         inner = QWidget()
         inner.setLayout(form)
         scroll = QScrollArea()
@@ -557,6 +570,7 @@ class SettingsDialog(QDialog):
         w["model"] = self.model.currentData()
         s.setdefault("channel", {})["style_notes"] = self.notes.toPlainText().strip()
         s.setdefault("app", {})["projects_dir"] = self.projects.text().strip()
+        s["app"]["check_updates"] = self.auto_update.isChecked()
         s.setdefault("thumbnails", {})["characters_dir"] = self.chars.text().strip()
         m = s.setdefault("music", {})
         m["enabled"] = self.music_on.isChecked()
@@ -588,7 +602,8 @@ class SettingsDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"{APP_NAME} {__version__}")
+        self.setWindowTitle(f"{APP_NAME} {updater.current_version()}")
+        self.update_info = None
         self.resize(980, 760)
         self.bridge = Bridge()
         self.stop = threading.Event()
@@ -634,6 +649,22 @@ class MainWindow(QMainWindow):
         self.setup_warning = label("", "hint")
         self.setup_warning.setStyleSheet("color:#e0b050;")
         v.addWidget(self.setup_warning)
+
+        self.update_bar = QFrame()
+        self.update_bar.setObjectName("card")
+        ub = QHBoxLayout(self.update_bar)
+        self.update_label = label("", "big")
+        self.update_btn = QPushButton("Update now")
+        self.update_btn.setObjectName("primary")
+        self.update_btn.setStyleSheet("padding: 6px 18px; font-size: 10.5pt;")
+        self.update_btn.clicked.connect(self.install_update)
+        later = QPushButton("Later")
+        later.clicked.connect(lambda: self.update_bar.setVisible(False))
+        ub.addWidget(self.update_label, 1)
+        ub.addWidget(later)
+        ub.addWidget(self.update_btn)
+        self.update_bar.setVisible(False)
+        v.addWidget(self.update_bar)
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(12)
@@ -986,6 +1017,64 @@ class MainWindow(QMainWindow):
             theme.badge_style = value
         theme.save(path)
 
+    # -- updates -----------------------------------------------------------------------
+    def check_for_updates(self, quiet: bool = True):
+        bridge = self.update_bridge = Bridge()
+
+        def found(upd):
+            if upd is None:
+                if not quiet:
+                    QMessageBox.information(self, APP_NAME, f"You're on the latest version "
+                                                            f"({updater.current_version()}).")
+                return
+            self.update_info = upd
+            self.update_label.setText(f"KDcut {upd.version} is available (you have "
+                                      f"{updater.current_version()}).")
+            self.update_bar.setVisible(True)
+            if not quiet:
+                self.pages.setCurrentIndex(0)
+
+        bridge.done.connect(found)
+        bridge.failed.connect(lambda e: None if quiet else
+                              QMessageBox.warning(self, APP_NAME, f"Couldn't check for updates:\n{e}"))
+        run_in_thread(bridge, updater.check)
+
+    def install_update(self):
+        if self.update_info is None:
+            return
+        if self.pages.currentIndex() == 1:
+            QMessageBox.information(self, APP_NAME, "Finish or cancel the current edit first.")
+            return
+        upd = self.update_info
+        if QMessageBox.question(self, APP_NAME, f"Download and install KDcut {upd.version}?\n\n"
+                                "KDcut will close, update itself and open again. Your settings and "
+                                "videos are kept.") != QMessageBox.StandardButton.Yes:
+            return
+        self.update_btn.setEnabled(False)
+        self.update_btn.setText("Downloading… 0%")
+        bridge = self.update_bridge = Bridge()
+        bridge.progress.connect(lambda f: self.update_btn.setText(f"Downloading… {int(f * 100)}%"))
+
+        def downloaded(path):
+            try:
+                updater.run_installer(path)
+            except Exception as exc:
+                QMessageBox.warning(self, APP_NAME, f"Couldn't start the installer:\n{exc}\n\n"
+                                                    f"It was saved to {path}")
+                self.update_btn.setEnabled(True)
+                self.update_btn.setText("Update now")
+                return
+            QApplication.quit()
+
+        def failed(e):
+            QMessageBox.warning(self, APP_NAME, f"The update download failed:\n{e}")
+            self.update_btn.setEnabled(True)
+            self.update_btn.setText("Update now")
+
+        bridge.done.connect(downloaded)
+        bridge.failed.connect(failed)
+        run_in_thread(bridge, lambda: updater.download(upd, bridge.progress.emit))
+
     def pick_series_logo(self):
         from kdcut import thumbnails
         series = self.series.currentText().strip()
@@ -1132,6 +1221,8 @@ def main(argv=None) -> int:
                                             "Please reinstall KDcut.")
     elif not config.SETTINGS_FILE.exists():
         win.open_settings(welcome=True)
+    if config.load()["app"].get("check_updates", True) and appcore.bundle_dir() is not None:
+        win.check_for_updates(quiet=True)
     return app.exec()
 
 

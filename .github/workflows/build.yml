@@ -57,6 +57,10 @@ jobs:
           $env:PATH = "$pwd\packaging\ffmpeg;$env:PATH"
           python -m unittest discover -s tests -v
 
+      - name: Stamp build version
+        shell: pwsh
+        run: Set-Content -Path src/kdcut/_build.py -Value 'VERSION = "0.4.${{ github.run_number }}"'
+
       - name: Build app
         run: pyinstaller packaging/kdcut.spec --noconfirm
 

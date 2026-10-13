@@ -40,3 +40,5 @@ Name: "{autodesktop}\KDcut"; Filename: "{app}\KDcut.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\KDcut.exe"; Description: "Open KDcut"; Flags: nowait postinstall skipifsilent
+; In-app updates run the installer silently; reopen KDcut when they finish.
+Filename: "{app}\KDcut.exe"; Flags: nowait; Check: WizardSilent

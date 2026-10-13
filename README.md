@@ -18,6 +18,10 @@ YouTube. You review the timeline in Resolve, tweak it, and export.
 3. If you have an NVIDIA GPU, click **Download GPU support** in Settings (one time, about 1 GB)
    so transcription runs on the GPU.
 
+**Updating:** KDcut checks for a new version when it starts. When one is out, a bar appears at the
+top; click **Update now** and it downloads the installer, updates itself and reopens, keeping your
+settings and videos. You can also use **Settings → Updates → Check now**.
+
 The first video also downloads the speech-recognition model, about 3 GB and one time only.
 After that, the only thing that leaves your PC is transcript text sent to Claude.
 

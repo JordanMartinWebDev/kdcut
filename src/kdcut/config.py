@@ -67,6 +67,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "app": {
         "projects_dir": str(Path.home() / "Videos" / "KDcut"),
+        "check_updates": True,     # look for a newer KDcut when the app starts
     },
     "timeline": {
         "fps": "auto",             # auto = match first recording, or e.g. 60 / 30 / 29.97

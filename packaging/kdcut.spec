@@ -9,7 +9,7 @@ root = os.path.dirname(here)
 
 datas = [(os.path.join(here, "kdcut.ico"), ".")]
 binaries = []
-hiddenimports = ["kdcut.selftest", "kdcut.gpu"]
+hiddenimports = ["kdcut.selftest", "kdcut.gpu", "kdcut.updater", "kdcut._build"]
 
 ffmpeg_dir = os.path.join(here, "ffmpeg")
 if os.path.isdir(ffmpeg_dir):

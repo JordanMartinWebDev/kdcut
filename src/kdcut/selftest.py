@@ -99,6 +99,13 @@ def run(out_file: Path) -> int:
         return f"{len(out)} thumbnails"
     check("thumbnails", thumb)
 
+    def version():
+        from kdcut import updater
+        v = updater.current_version()
+        assert updater.parse_version(v), v
+        return v
+    check("version", version)
+
     if "--whisper" in sys.argv:
         def whisper():
             cfg = config._merge(config.DEFAULTS, {"whisper": {"model": "tiny", "device": "cpu"}})
