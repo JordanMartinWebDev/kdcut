@@ -45,7 +45,7 @@ SCHEMA = {
             "description": "Wordless gameplay worth keeping after a block (a fight, a fall, a reveal). Only when the transcript implies something is happening on screen.",
             "items": {"type": "object", "properties": {
                 "id": {"type": "string"},
-                "seconds": {"type": "number", "minimum": 1, "maximum": 30},
+                "seconds": {"type": "number", "minimum": 1, "maximum": 60},
             }, "required": ["id", "seconds"]},
         },
         "broll": {
@@ -120,6 +120,10 @@ def system_prompt(cfg: dict, video: dict) -> str:
         "made of words from the vocabulary lists.",
         "- Chapters: 3-12 chapters for long videos, titled in the creator's voice.",
         "- Only use block ids that appear in the transcript.",
+        "- Lines starting with [on screen ...] describe what was happening during a stretch "
+        "where the creator wasn't talking (action 0 = nothing, 3 = intense). For action 2-3, "
+        "keep that gameplay with an extend on the block just before it (up to 60s). Action 0-1 "
+        "stretches are safe to cut. Use these notes for overlays and SFX too.",
         "",
         "Keep viewers watching (YouTube retention):",
         "- The first 30 seconds decide whether people stay. Get to the point fast: keep a quick "
@@ -144,7 +148,8 @@ def system_prompt(cfg: dict, video: dict) -> str:
     return "\n".join(lines)
 
 
-def format_blocks(blocks: list[Block], recordings: list[Path], context: list[Block] = ()) -> str:
+def format_blocks(blocks: list[Block], recordings: list[Path], context: list[Block] = (),
+                  notes: dict[str, list[str]] | None = None) -> str:
     out = []
     if context:
         out.append("(Earlier blocks, for context only. Do not edit these.)")
@@ -165,6 +170,8 @@ def format_blocks(blocks: list[Block], recordings: list[Path], context: list[Blo
             tags.append("[CHAPTER]")
         tag_str = " " + " ".join(tags) if tags else ""
         out.append(f"{b.id} [{fmt_ts(b.start)} {b.duration:.0f}s]{tag_str} {b.text}")
+        for note in (notes or {}).get(b.id, []):
+            out.append(f"      {note}")
     return "\n".join(out)
 
 
@@ -202,7 +209,8 @@ ToolCaller = Callable[..., dict]
 
 def make_plan(blocks: list[Block], recordings: list[Path], cfg: dict, video: dict,
               broll: list[tuple[str, float]], vocab: dict[str, list[str]],
-              caller: ToolCaller = llm.call_tool, log=print) -> Plan:
+              caller: ToolCaller = llm.call_tool, log=print,
+              notes: dict[str, list[str]] | None = None) -> Plan:
     window = max(int(cfg["llm"].get("window_blocks", 600)), 50)
     valid = {b.id for b in blocks}
     by_id = {b.id: b for b in blocks}
@@ -220,7 +228,7 @@ def make_plan(blocks: list[Block], recordings: list[Path], cfg: dict, video: dic
         remaining_broll = [(n, d) for n, d in broll if n not in used_broll]
         result = caller(
             cfg, sys_prompt,
-            user_prompt(format_blocks(chunk, recordings, context), remaining_broll, vocab),
+            user_prompt(format_blocks(chunk, recordings, context, notes), remaining_broll, vocab),
             "submit_edit", "Submit the edit decision list for these transcript blocks.", SCHEMA,
         )
         chunk_ids = {b.id for b in chunk}
@@ -231,7 +239,7 @@ def make_plan(blocks: list[Block], recordings: list[Path], cfg: dict, video: dic
                 plan.drop[bid] = d.get("reason", "")
         for e in result.get("extend", []):
             if e.get("id") in chunk_ids:
-                plan.extend[e["id"]] = float(min(max(e.get("seconds", 0), 0), 30))
+                plan.extend[e["id"]] = float(min(max(e.get("seconds", 0), 0), 60))
         broll_names = {n for n, _ in broll}
         for item in result.get("broll", []):
             if item.get("at") in chunk_ids and item.get("file") in broll_names and item["file"] not in used_broll:

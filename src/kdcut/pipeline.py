@@ -18,7 +18,7 @@ import tomllib
 from pathlib import Path
 
 from kdcut import blocks as blocks_mod
-from kdcut import fcpxml, media, metadata, planner, transcribe
+from kdcut import fcpxml, media, metadata, planner, transcribe, vision
 from kdcut.assets import AssetIndex
 from kdcut.blocks import fmt_ts
 from kdcut.planner import Plan
@@ -133,7 +133,22 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         broll_by_name[name] = p
     broll = [(n, media.probe(p).duration or 5.0) for n, p in broll_by_name.items()]
     plan_file = out / "plan.json"
-    if plan_file.is_file() and not replan and not retranscribe:
+    reuse_plan = plan_file.is_file() and not replan and not retranscribe
+    use_vision = use_ai and bool(video.get("vision", cfg.get("vision", {}).get("enabled", False)))
+    notes: dict[str, list[str]] = {}
+    if use_vision and not reuse_plan:
+        r.step(2, "Looking at the footage")
+        try:
+            notes = vision.analyse(recordings, infos, blocks, cfg, work, caller=call, log=r.log,
+                                   check=r.check)
+            (out / "screen_notes.json").write_text(json.dumps(notes, indent=1), encoding="utf-8")
+        except Cancelled:
+            raise
+        except Exception as exc:  # never lose the edit over the optional footage check
+            r.log(f"Footage check skipped: {exc}")
+    elif (out / "screen_notes.json").is_file() and use_vision:
+        notes = json.loads((out / "screen_notes.json").read_text(encoding="utf-8"))
+    if reuse_plan:
         r.step(2, "AI edit (reusing saved plan)")
         plan = Plan.load(plan_file)
     elif use_ai:
@@ -143,7 +158,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             vocab = {"sound effect": index.vocabulary("sfx", 100),
                      "overlay": index.vocabulary("overlay", 100)}
         plan = planner.make_plan(blocks, recordings, cfg, video, broll, vocab, caller=call,
-                                 log=r.log)
+                                 log=r.log, notes=notes)
         plan.save(plan_file)
     else:
         r.step(2, "Quick edit (spoken cues and pauses only)")
@@ -167,7 +182,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             r.log("Writing titles and description" + (", picking a cold open" if want_cold_open else ""))
             try:
                 md = metadata.generate(cfg, video, [by_id[i] for i in kept_ids], caller=call,
-                                       cold_open=want_cold_open)
+                                       cold_open=want_cold_open, notes=notes)
                 md_file.write_text(json.dumps({**md.__dict__, "_cold_open_requested": want_cold_open},
                                               indent=2, ensure_ascii=False), encoding="utf-8")
             except Exception as exc:  # packaging is a bonus; never lose the timeline over it
@@ -324,7 +339,8 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
 
     yt_chapters = metadata.youtube_chapters(chapter_times, final)
     kit_frames: list[str] = []
-    if use_ai:
+    shots = [Path(p) for p in video.get("screenshots") or [] if Path(p).exists()]
+    if use_ai and not shots:
         for n, bid in enumerate(md.thumbnail_moments[:5], 1):
             b = by_id.get(bid)
             if not b:
@@ -344,9 +360,37 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
 
     r.log(f"Done. Raw {fmt_ts(raw_total)} -> edit {fmt_ts(final)}")
     r.log(f"timeline:   {xml_path}")
+    thumbs: list[Path] = []
+    if cfg.get("thumbnails", {}).get("enabled", True):
+        if not shots:   # no screenshot given: use the frames the AI picked from the video
+            shots = sorted((out / "thumbnail_frames").glob("frame_*.jpg"))[:3]
+        try:
+            thumbs = make_thumbnails(out, cfg, video, shots, use_ai, caller=call, log=r.log, index=index)
+        except Exception as exc:  # thumbnails are a bonus; never lose the edit over them
+            r.log(f"Thumbnails skipped: {exc}")
+
     return {"timeline": xml_path, "final_seconds": final, "raw_seconds": raw_total,
             "placed": placed, "plan": plan, "clips": len(tl.main), "out_dir": out,
-            "review": out / "review.md", "upload_kit": out / "upload_kit.md"}
+            "review": out / "review.md", "upload_kit": out / "upload_kit.md",
+            "thumbnails": thumbs}
+
+
+def make_thumbnails(out: Path, cfg: dict, video: dict, screenshots: list[Path], use_ai: bool,
+                    caller=None, log=print, index: AssetIndex | None = None) -> list[Path]:
+    """(Re)make thumbnails for an edited video. Also used by the app's "New ideas" button."""
+    from kdcut import thumbnails
+    if not screenshots:
+        log("No screenshot for thumbnails (drag one into the Thumbnail box)")
+        return []
+    if index is None:
+        index = AssetIndex.load(Path(cfg["assets"]["index_path"]))
+    kit = {}
+    if (out / "upload_kit.json").is_file():
+        kit = json.loads((out / "upload_kit.json").read_text(encoding="utf-8"))
+    log("Making thumbnails")
+    return thumbnails.make(cfg, video, screenshots, out, titles=kit.get("titles") or [video.get("title", "")],
+                           text_ideas=kit.get("thumbnail_text") or [], index=index, use_ai=use_ai,
+                           caller=caller or planner.llm.call_tool, log=log)
 
 
 def _safe(name: str) -> str:

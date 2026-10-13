@@ -21,10 +21,26 @@ def api_key(cfg: dict) -> str | None:
         os.environ.get(cfg["llm"].get("api_key_env", "ANTHROPIC_API_KEY"))
 
 
-def call_tool(cfg: dict, system: str, user: str, tool_name: str, tool_description: str,
+def image_block(path, max_side: int = 768) -> dict:
+    """An image content block for the API (JPEG, resized so the long side <= max_side)."""
+    import base64
+    import io
+
+    from PIL import Image
+    with Image.open(path) as im:
+        im = im.convert("RGB")
+        im.thumbnail((max_side, max_side))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=82)
+    return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                        "data": base64.b64encode(buf.getvalue()).decode("ascii")}}
+
+
+def call_tool(cfg: dict, system: str, user, tool_name: str, tool_description: str,
               schema: dict, retries: int = 3) -> dict:
     """Send one prompt and force the model to answer by calling `tool_name`.
 
+    `user` is text, or a list of content blocks (text and images).
     Returns the tool input (a dict matching `schema`).
     """
     key = api_key(cfg)

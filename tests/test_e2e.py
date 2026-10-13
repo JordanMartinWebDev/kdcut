@@ -3,6 +3,7 @@
 Needs ffmpeg. Whisper and the Claude API are not called.
 """
 
+import json
 import shutil
 import subprocess
 import tempfile
@@ -44,6 +45,16 @@ class FakeAI:
 
     def __call__(self, cfg, system, user, tool_name, desc, schema):
         self.calls.append((tool_name, user))
+        if tool_name == "describe_frames":
+            ids = [b["text"].split(":")[0] for b in user if b.get("type") == "text" and b["text"].startswith("F")]
+            return {"frames": [{"id": i, "desc": "fighting a zombie in a cave", "action": 3} for i in ids]}
+        if tool_name == "design_thumbnails":
+            return {"theme": {"primary": "#E63946", "accent": "#FFD23F", "font": "not-a-font", "badge": "EP {n}"},
+                    "concepts": [
+                        {"background": 1, "text": "FINALLY DIAMONDS", "highlight": "DIAMONDS", "text_side": "left",
+                         "icons": ["Diamond_Pickaxe", "made-up icon"], "character": "shocked",
+                         "focus": {"x": 0.7, "y": 0.5}, "ring": True, "arrow": True},
+                        {"background": 1, "text": "THE CASTLE", "text_side": "right", "character": None}]}
         if tool_name == "submit_edit":
             return {
                 "drop": [{"id": "B0001", "reason": "mic check"}],
@@ -91,6 +102,10 @@ class EndToEnd(unittest.TestCase):
            "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-auto-alt-ref", "0",
            str(pack / "Item  Animations" / "Item Spin" / "diamond_pickaxe_Item Spin.webm"))
 
+        from PIL import Image
+        (pack / "Assets For Thumbnails" / "Items").mkdir(parents=True)
+        Image.new("RGBA", (16, 16), (90, 220, 220, 255)).save(pack / "Assets For Thumbnails" / "Items" / "Diamond_Pickaxe.png")
+
         home = cls.tmp / "home"
         cls.cfg = config._merge(config.DEFAULTS, {
             "assets": {"index_path": str(home / "index.json"), "cache_dir": str(home / "cache")},
@@ -116,8 +131,20 @@ class EndToEnd(unittest.TestCase):
             key = transcribe._cache_key(rec, track, cls.cfg["whisper"]["model"])
             transcribe.save_cache(work / f"{rec.stem}.words.json", key, words)
         cls.proj = proj
+        # Thumbnail inputs: a screenshot and a character pose.
+        shot = cls.tmp / "screenshot.png"
+        ff("-f", "lavfi", "-i", "testsrc2=size=1920x1080", "-frames:v", "1", str(shot))
+        chars = cls.tmp / "poses"
+        chars.mkdir()
+        from PIL import Image
+        Image.new("RGBA", (300, 600), (240, 200, 40, 255)).save(chars / "shocked.png")
+        cls.cfg = config._merge(cls.cfg, {"vision": {"enabled": True, "min_gap": 8},
+                                          "thumbnails": {"characters_dir": str(chars),
+                                                         "themes_dir": str(home / "themes")}})
+        cls.video = {"title": "Episode 12", "topic": "Building a castle", "series": "Hardcore",
+                     "episode": 12, "screenshots": [str(shot)]}
         cls.ai = FakeAI()
-        cls.result = run(proj, cls.cfg, use_ai=True, caller=cls.ai)
+        cls.result = run(proj, cls.cfg, use_ai=True, caller=cls.ai, video=cls.video)
         out = proj / "output"
         cls.kit = (out / "upload_kit.md").read_text(encoding="utf-8")
         cls.review = (out / "review.md").read_text(encoding="utf-8")
@@ -132,7 +159,7 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(media.pick_mic_track(info, "auto"), 1)
 
     def test_ai_saw_cues_and_broll(self):
-        tool, prompt = self.ai.calls[0]
+        prompt = next(c[1] for c in self.ai.calls if c[0] == "submit_edit")
         self.assertIn("[FORCED CUT]", prompt)
         self.assertIn("[HIGHLIGHT]", prompt)
         self.assertIn("castle-walls-timelapse.mp4", prompt)
@@ -141,7 +168,7 @@ class EndToEnd(unittest.TestCase):
         out = self.proj / "output"
         for f in ("Episode 12.fcpxml", "review.md", "upload_kit.md", "plan.json", "transcript.txt"):
             self.assertTrue((out / f).exists(), f)
-        self.assertTrue((out / "thumbnail_frames" / "frame_1.jpg").exists())
+        self.assertTrue((out / "thumbnails" / "thumbnail_1.jpg").exists())
         self.assertIn("I Built a Castle and Found Diamonds", self.kit)
         self.assertIn("DIAMONDS!", self.kit)
         self.assertIn("mic check", self.review)
@@ -224,6 +251,31 @@ class EndToEnd(unittest.TestCase):
         system_prompts = [c for c in self.ai.calls if c[0] == "submit_metadata"]
         self.assertIn("cold open", system_prompts[0][1])
         self.assertIn("[HIGHLIGHT]", system_prompts[0][1])
+
+    def test_footage_check_feeds_the_planner(self):
+        described = [c for c in self.ai.calls if c[0] == "describe_frames"]
+        self.assertTrue(described, "frames were sent to the AI")
+        plan_prompt = next(c[1] for c in self.ai.calls if c[0] == "submit_edit")
+        self.assertIn("[on screen", plan_prompt)
+        self.assertIn("fighting a zombie", plan_prompt)
+        self.assertTrue(list((self.proj / "output" / ".work" / "frames").glob("F*.jpg")))
+
+    def test_thumbnails_made_with_series_theme(self):
+        thumbs = self.result["thumbnails"]
+        self.assertEqual(len(thumbs), 2)
+        from PIL import Image
+        for t in thumbs:
+            self.assertEqual(Image.open(t).size, (1280, 720))
+            self.assertLess(t.stat().st_size, 2_000_000)
+        theme = json.loads((Path(self.cfg["thumbnails"]["themes_dir"]) / "hardcore.json").read_text())
+        self.assertEqual(theme["accent"], "#FFD23F")
+        self.assertEqual(theme["font"], "")          # unknown font names are ignored
+        concepts = json.loads((self.proj / "output" / "thumbnails" / "concepts.json").read_text())
+        self.assertEqual(concepts[0]["icons"], ["Diamond_Pickaxe"])
+        self.assertEqual(concepts[0]["character"], "shocked")
+        prompt = next(c[1] for c in self.ai.calls if c[0] == "design_thumbnails")
+        self.assertTrue(any(b.get("type") == "image" for b in prompt))
+        self.assertIn("No style exists yet", prompt[0]["text"])
 
     def test_rerun_reuses_plan_without_ai(self):
         ai = FakeAI()

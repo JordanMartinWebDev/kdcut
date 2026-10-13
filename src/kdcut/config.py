@@ -43,6 +43,17 @@ DEFAULTS: dict[str, Any] = {
         "target_keep": "60-80%",   # guidance for the AI, not a hard rule
         "cold_open": True,         # start with a short teaser of the best moment
     },
+    "vision": {
+        "enabled": False,          # let the AI look at frames from quiet stretches
+        "min_gap": 8,              # seconds without talking before it takes a look
+        "max_frames": 120,         # cost cap per video
+    },
+    "thumbnails": {
+        "enabled": True,
+        "characters_dir": "",      # folder of transparent PNG poses of your skin
+        "themes_dir": str(HOME_DIR / "themes"),
+        "variants": 3,
+    },
     "assets": {
         # Folders containing editing packs (sound effects, overlays, transitions).
         "packs": [],

@@ -102,13 +102,14 @@ class AssetTests(unittest.TestCase):
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_bytes(b"x")
             assets = scan_pack(root)
-            self.assertEqual(len(assets), 9)
+            self.assertEqual(len(assets), 10)
             idx = AssetIndex(assets)
             cats = {Path(a.path).name: a.category for a in assets}
             self.assertEqual(cats["levelup.wav"], "sfx")
             self.assertEqual(cats["diamond_pickaxe_Item Spin.mp4"], "overlay")
             self.assertEqual(cats["Sword Wipe.mp4"], "transition")
             self.assertEqual(cats["Diamond_Ore.png"], "image")
+            self.assertEqual(cats["Minecraft.ttf"], "font")
             self.assertEqual(Path(idx.best("level up", "sfx").path).name, "levelup.wav")
             self.assertEqual(Path(idx.best("diamond pickaxe spin", "overlay").path).name,
                              "diamond_pickaxe_Item Spin.mp4")

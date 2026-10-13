@@ -19,7 +19,8 @@ from pathlib import Path
 from kdcut.media import AUDIO_EXTS, IMAGE_EXTS, VIDEO_EXTS
 
 ANIM_EXTS = {".gif"}
-SKIP_DIRS = {"__macosx", ".git", "build", "fonts", "font", "premiere pro presets & mogrts",
+FONT_EXTS = {".ttf", ".otf"}
+SKIP_DIRS = {"__macosx", ".git", "build", "premiere pro presets & mogrts",
              "davichi resolve packs", "davinci resolve packs", "mods, shaders & texture packs",
              "useful websites", "test output"}
 SKIP_NAMES = {".ds_store", "desktop.ini", "thumbs.db"}
@@ -87,6 +88,8 @@ def _singular(tok: str) -> str:
 
 
 def _kind(ext: str) -> str | None:
+    if ext in FONT_EXTS:
+        return "font"
     if ext in AUDIO_EXTS:
         return "audio"
     if ext in VIDEO_EXTS or ext in ANIM_EXTS:
@@ -97,6 +100,8 @@ def _kind(ext: str) -> str | None:
 
 
 def _category(rel_path: str, kind: str) -> str:
+    if kind == "font":
+        return "font"
     low = rel_path.lower().replace("\\", "/")
     if kind == "audio":
         return "music" if "music" in low else "sfx"

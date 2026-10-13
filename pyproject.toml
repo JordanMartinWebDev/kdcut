@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kdcut"
-version = "0.2.0"
+version = "0.3.0"
 description = "AI-assisted editor for KDPlays Minecraft videos: raw OBS sessions in, DaVinci Resolve timeline out."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,7 +16,8 @@ whisper = ["faster-whisper>=1.1"]
 cuda = ["nvidia-cublas-cu12", "nvidia-cudnn-cu12>=9,<10"]
 all = ["faster-whisper>=1.1", "nvidia-cublas-cu12", "nvidia-cudnn-cu12>=9,<10"]
 # The desktop app (what the Windows installer bundles).
-app = ["faster-whisper>=1.1", "PySide6-Essentials>=6.6", "hf_xet"]
+app = ["faster-whisper>=1.1", "PySide6-Essentials>=6.6", "hf_xet", "Pillow>=10.1"]
+thumbnails = ["Pillow>=10.1"]
 
 [project.scripts]
 kdcut = "kdcut.cli:main"

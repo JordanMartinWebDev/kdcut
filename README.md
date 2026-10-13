@@ -35,6 +35,33 @@ Each video gets its own folder in `Videos\KDcut\<name>` containing the timeline,
 (every cut and why), `upload_kit.md` (titles, description, chapters, tags) and thumbnail frame
 candidates. Re-running the same video is fast because the transcript and the AI's decisions are saved.
 
+## Thumbnails
+
+Drag an in-game screenshot (F2) into the **Thumbnail** box. KDcut makes three 1280x720
+thumbnails using:
+
+- **2–4 punchy words** with a thick outline, plus one word in the series' accent colour
+- **your character**: transparent PNG poses of your skin. Set the folder in Settings, and name
+  files by mood (`waving.png`, `thinking.png`, `shocked.png`) so the AI picks the right one.
+  Brazey's Emote Generator can make 70 poses from your skin.
+- **one or two item icons** from your packs, when they tell the story
+- a **ring and arrow** on the key thing in the screenshot, when there is one
+- **series branding**: your series logo (the **Series logo…** button), episode badge, and
+  accent colours
+
+The first time a series gets thumbnails, the AI designs its style (colours and font, matched to
+your logo and character) and saves it, so every later episode looks consistent. The bottom-right
+corner is kept clear because YouTube puts the video length there. Click **New thumbnail ideas**
+for another round; earlier ones are never overwritten.
+
+## Letting the AI look at the footage
+
+With **Let the AI look at the footage** ticked, KDcut finds stretches where you weren't talking,
+checks them for loud game audio and scene changes (free, on your PC), then sends small frames
+from those spots to Claude. The editor sees notes like *"[on screen, 24s without talking] fighting
+zombies at night, low health (action 3)"*, so it keeps wordless action and cuts AFK time. It's
+capped at 120 frames per video and adds a little to the API cost.
+
 ## How it works
 
 1. **Transcribe** every recording on your own NVIDIA GPU with Whisper (free, local, word-level timestamps).
@@ -205,7 +232,8 @@ whole pipeline, including that every cut in the FCPXML lands on a whole frame.
 - [x] Transcribe, spoken cues, AI cut list, Resolve timeline
 - [x] Editing pack index, SFX and overlays, green-screen keying
 - [x] B-roll placement, chapters, titles, description, thumbnail frames
-- [ ] Thumbnail compositing (frame + your face + big text)
+- [x] Thumbnails with a consistent style per series (character, icons, logo, episode badge)
+- [x] Optional footage check (the AI looks at frames from quiet stretches)
 - [ ] Upload to YouTube as private with the metadata filled in
 - [x] Desktop app with drag and drop, and a Windows installer built by GitHub Actions
 - [ ] Auto speed-ramp long wordless stretches into timelapses

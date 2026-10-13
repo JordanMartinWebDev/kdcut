@@ -86,6 +86,19 @@ def run(out_file: Path) -> int:
         return f"{res['clips']} clips, {res['final_seconds']:.1f}s"
     check("edit pipeline", edit)
 
+    def thumb():
+        from PIL import Image
+
+        from kdcut import thumbnails
+        shot = tmp / "shot.png"
+        Image.new("RGB", (1920, 1080), (70, 80, 90)).save(shot)
+        cfg = config._merge(config.DEFAULTS, {"thumbnails": {"themes_dir": str(tmp / "themes")}})
+        out = thumbnails.make(cfg, {"title": "x", "episode": 1}, [shot], tmp, titles=["Test"],
+                              text_ideas=["IT WORKS"], index=None, use_ai=False, log=lambda m: None)
+        assert out and Image.open(out[0]).size == (1280, 720)
+        return f"{len(out)} thumbnails"
+    check("thumbnails", thumb)
+
     if "--whisper" in sys.argv:
         def whisper():
             cfg = config._merge(config.DEFAULTS, {"whisper": {"model": "tiny", "device": "cpu"}})

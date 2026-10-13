@@ -14,6 +14,7 @@ from kdcut import media
 
 RECORDING_EXTS = media.VIDEO_EXTS
 BROLL_EXTS = media.VIDEO_EXTS | media.IMAGE_EXTS
+SCREENSHOT_EXTS = media.IMAGE_EXTS
 
 
 def natural_key(p: str | Path):
@@ -58,6 +59,9 @@ class Project:
     topic: str = ""
     recordings: list[str] = field(default_factory=list)
     broll: list[str] = field(default_factory=list)
+    series: str = ""
+    episode: str = ""
+    screenshots: list[str] = field(default_factory=list)
 
     def out_dir(self, projects_dir: Path) -> Path:
         return Path(projects_dir) / safe_name(self.name)
@@ -85,6 +89,18 @@ def validate(project: Project) -> list[str]:
     if missing:
         problems.append("These files can't be found anymore:\n" + "\n".join(missing[:5]))
     return problems
+
+
+def known_series(cfg: dict) -> list[str]:
+    """Series that already have a thumbnail style saved."""
+    d = Path(cfg["thumbnails"]["themes_dir"]).expanduser()
+    names = []
+    for f in sorted(d.glob("*.json")) if d.is_dir() else []:
+        try:
+            names.append(json.loads(f.read_text(encoding="utf-8")).get("name") or f.stem)
+        except (OSError, json.JSONDecodeError):
+            pass
+    return names
 
 
 def setup_problems(cfg: dict) -> list[str]:

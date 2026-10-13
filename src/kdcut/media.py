@@ -164,10 +164,11 @@ def extract_audio(src: Path, stream: int, dest: Path) -> Path:
     return dest
 
 
-def extract_frame(src: Path, at: float, dest: Path) -> Path:
+def extract_frame(src: Path, at: float, dest: Path, width: int | None = None) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    _run(["ffmpeg", "-y", "-v", "error", "-ss", f"{at:.3f}", "-i", str(src),
-          "-frames:v", "1", "-q:v", "2", str(dest)])
+    vf = ["-vf", f"scale={width}:-2"] if width else []
+    _run(["ffmpeg", "-y", "-v", "error", "-ss", f"{max(at, 0):.3f}", "-i", str(src),
+          "-frames:v", "1", *vf, "-q:v", "3", "-update", "1", str(dest)])
     return dest
 
 

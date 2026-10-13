@@ -10,7 +10,7 @@ import traceback
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QFont, QGuiApplication, QIcon, QKeySequence, QPainter, QShortcut
+from PySide6.QtGui import QDesktopServices, QFont, QGuiApplication, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
     QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
@@ -231,6 +231,23 @@ class DropList(QListWidget):
             p.end()
 
 
+class ThumbLabel(QLabel):
+    """A thumbnail preview; click to open the full image."""
+
+    def __init__(self, path: Path):
+        super().__init__()
+        self.path = path
+        pm = QPixmap(str(path))
+        self.setPixmap(pm.scaled(288, 162, Qt.AspectRatioMode.KeepAspectRatio,
+                                 Qt.TransformationMode.SmoothTransformation))
+        self.setToolTip(f"{path.name}: click to open")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet("border: 2px solid #3a3d44; border-radius: 6px;")
+
+    def mousePressEvent(self, event):
+        open_path(self.path)
+
+
 def drop_section(title: str, hint: str, lst: DropList, file_filter: str, parent: QWidget) -> QWidget:
     box = QWidget()
     v = QVBoxLayout(box)
@@ -371,6 +388,21 @@ class SettingsDialog(QDialog):
         self.notes.setFixedHeight(80)
         form.addRow("Your editing style", self.notes)
 
+        # Characters for thumbnails
+        self.chars = QLineEdit(cfg["thumbnails"].get("characters_dir", ""))
+        self.chars.setPlaceholderText("Folder with transparent PNG poses of your skin")
+        cbrowse = QPushButton("Browse…")
+        cbrowse.clicked.connect(lambda: self._pick_dir(self.chars, "Folder with your character poses"))
+        crow = QHBoxLayout()
+        crow.addWidget(self.chars, 1)
+        crow.addWidget(cbrowse)
+        cbox = QVBoxLayout()
+        cbox.addLayout(crow)
+        cbox.addWidget(label("Tip: Brazey's Emote Generator (in Brazey's pack, Pose Tool folder) makes 70 poses "
+                             "from your skin. Name your favourites by mood, e.g. shocked.png, celebrating.png.",
+                             "hint"))
+        form.addRow("Your character", cbox)
+
         # Projects folder
         self.projects = QLineEdit(cfg["app"]["projects_dir"])
         browse = QPushButton("Browse…")
@@ -407,6 +439,11 @@ class SettingsDialog(QDialog):
         d = QFileDialog.getExistingDirectory(self, "Choose an editing pack folder")
         if d and d not in self.pack_list():
             self.packs.addItem(str(Path(d)))
+
+    def _pick_dir(self, field: QLineEdit, title: str):
+        d = QFileDialog.getExistingDirectory(self, title, field.text())
+        if d:
+            field.setText(str(Path(d)))
 
     def pick_projects(self):
         d = QFileDialog.getExistingDirectory(self, "Where should videos be saved?", self.projects.text())
@@ -476,6 +513,7 @@ class SettingsDialog(QDialog):
         w["model"] = self.model.currentData()
         s.setdefault("channel", {})["style_notes"] = self.notes.toPlainText().strip()
         s.setdefault("app", {})["projects_dir"] = self.projects.text().strip()
+        s.setdefault("thumbnails", {})["characters_dir"] = self.chars.text().strip()
         return s
 
     def save(self):
@@ -559,6 +597,24 @@ class MainWindow(QMainWindow):
         grid.addWidget(self.name, 0, 1)
         grid.addWidget(label("What happens", "section", wrap=False), 1, 0)
         grid.addWidget(self.topic, 1, 1)
+        self.series = QComboBox()
+        self.series.setEditable(True)
+        self.series.lineEdit().setPlaceholderText("e.g. Hardcore Survival (keeps thumbnails consistent)")
+        self.series.addItems(appcore.known_series(config.load()))
+        self.series.setCurrentText("")
+        self.episode = QLineEdit()
+        self.episode.setPlaceholderText("Ep #")
+        self.episode.setMaximumWidth(90)
+        logo_btn = QPushButton("Series logo…")
+        logo_btn.setToolTip("A transparent PNG of the series logo. It goes on every thumbnail in this series.")
+        logo_btn.clicked.connect(self.pick_series_logo)
+        srow = QHBoxLayout()
+        srow.addWidget(self.series, 1)
+        srow.addWidget(logo_btn)
+        srow.addWidget(label("Episode", "section", wrap=False))
+        srow.addWidget(self.episode)
+        grid.addWidget(label("Series", "section", wrap=False), 2, 0)
+        grid.addLayout(srow, 2, 1)
         v.addLayout(grid)
 
         vid_filter = "Videos (*.mkv *.mp4 *.mov *.flv *.webm *.m4v *.avi)"
@@ -575,6 +631,11 @@ class MainWindow(QMainWindow):
         lists.addWidget(drop_section("B-roll", "Name files after what they show, e.g. "
                                      "castle-walls-timelapse.mp4", self.broll,
                                      vid_filter[:-1] + " *.png *.jpg)", self), 2)
+        self.shots = DropList(appcore.SCREENSHOT_EXTS,
+                              "Drag your in-game screenshot for the thumbnail here (up to 3)",
+                              sort_on_add=False)
+        lists.addWidget(drop_section("Thumbnail", "F2 screenshots from Minecraft work great.", self.shots,
+                                     "Images (*.png *.jpg *.jpeg *.webp *.bmp)", self), 2)
         v.addLayout(lists, 1)
 
         opts = QHBoxLayout()
@@ -585,7 +646,13 @@ class MainWindow(QMainWindow):
         self.cold_open.setChecked(bool(config.load()["edit"].get("cold_open", True)))
         self.fresh = QCheckBox("Start over (redo transcription and AI edit)")
         self.fresh.setToolTip("Normally re-running keeps the transcript and the AI's decisions so it's fast.")
+        self.vision = QCheckBox("Let the AI look at the footage")
+        self.vision.setToolTip("Sends small frames from quiet stretches so the AI can keep wordless action "
+                               "and cut AFK time. Adds a little to the API cost.")
+        self.vision.setChecked(bool(config.load()["vision"].get("enabled", False)))
         opts.addWidget(self.use_ai)
+        opts.addSpacing(20)
+        opts.addWidget(self.vision)
         opts.addSpacing(20)
         opts.addWidget(self.cold_open)
         opts.addSpacing(20)
@@ -599,6 +666,7 @@ class MainWindow(QMainWindow):
 
         for w in (self.name.textChanged, self.recs.changed, self.use_ai.toggled):
             w.connect(lambda *a: self.refresh_ready())
+        self.use_ai.toggled.connect(self.vision.setEnabled)
         return page
 
     # -- page 2: working ---------------------------------------------------------------
@@ -660,7 +728,7 @@ class MainWindow(QMainWindow):
             ("Open upload kit", "Titles, description, chapters, tags", lambda: self.open_out("upload_kit.md")),
             ("Copy best title", "", lambda: self.copy_kit("title")),
             ("Copy description + chapters", "", lambda: self.copy_kit("description")),
-            ("Open video folder", "Thumbnail frames and everything else", lambda: open_path(self.out_dir)),
+            ("Open video folder", "Everything for this video", lambda: open_path(self.out_dir)),
         ]
         for i, (text, hint, fn) in enumerate(buttons):
             b = QPushButton(text)
@@ -668,6 +736,20 @@ class MainWindow(QMainWindow):
             g.addWidget(b, i, 0)
             g.addWidget(label(hint, "hint"), i, 1)
         v.addWidget(card)
+
+        trow = QHBoxLayout()
+        trow.addWidget(label("Thumbnails", "section", wrap=False))
+        trow.addStretch(1)
+        self.more_thumbs = QPushButton("New thumbnail ideas")
+        self.more_thumbs.clicked.connect(self.remake_thumbnails)
+        open_thumbs = QPushButton("Open thumbnails folder")
+        open_thumbs.clicked.connect(lambda: open_path(self.out_dir / "thumbnails") if self.out_dir else None)
+        trow.addWidget(self.more_thumbs)
+        trow.addWidget(open_thumbs)
+        v.addLayout(trow)
+        self.thumb_row = QHBoxLayout()
+        self.thumb_row.setSpacing(12)
+        v.addLayout(self.thumb_row)
         self.notes_box = label("", "hint")
         v.addWidget(self.notes_box)
         v.addStretch(1)
@@ -689,7 +771,14 @@ class MainWindow(QMainWindow):
     def project(self) -> appcore.Project:
         return appcore.Project(name=self.name.text().strip(), topic=self.topic.text().strip(),
                                recordings=[str(p) for p in self.recs.paths()],
-                               broll=[str(p) for p in self.broll.paths()])
+                               broll=[str(p) for p in self.broll.paths()],
+                               series=self.series.currentText().strip(), episode=self.episode.text().strip(),
+                               screenshots=[str(p) for p in self.shots.paths()[:3]])
+
+    def video_info(self, proj: appcore.Project) -> dict:
+        return {"title": proj.name, "topic": proj.topic, "series": proj.series, "episode": proj.episode,
+                "screenshots": proj.screenshots, "cold_open": self.cold_open.isChecked(),
+                "vision": self.vision.isChecked()}
 
     def refresh_ready(self):
         cfg = self.cfg()
@@ -717,12 +806,20 @@ class MainWindow(QMainWindow):
         self.topic.setText(p.topic)
         self.recs.set_paths([Path(x) for x in p.recordings])
         self.broll.set_paths([Path(x) for x in p.broll])
+        self.series.setCurrentText(p.series)
+        self.episode.setText(p.episode)
+        self.shots.set_paths([Path(x) for x in p.screenshots])
 
     def new_video(self):
         self.name.clear()
         self.topic.clear()
         self.recs.set_paths([])
         self.broll.set_paths([])
+        self.shots.set_paths([])
+        try:  # next episode of the same series is the common case
+            self.episode.setText(str(int(self.episode.text()) + 1))
+        except ValueError:
+            self.episode.clear()
         self.fresh.setChecked(False)
         self.pages.setCurrentIndex(0)
 
@@ -753,7 +850,11 @@ class MainWindow(QMainWindow):
 
         fresh, use_ai = self.fresh.isChecked(), self.use_ai.isChecked()
         reporter = QtReporter(self.bridge, self.stop)
-        video = {"title": proj.name, "topic": proj.topic, "cold_open": self.cold_open.isChecked()}
+        video = self.video_info(proj)
+        settings = config.load_settings()   # remember the per-video switches for next time
+        settings.setdefault("vision", {})["enabled"] = self.vision.isChecked()
+        settings.setdefault("edit", {})["cold_open"] = self.cold_open.isChecked()
+        config.save_settings(settings)
 
         def work():
             return pipeline.run(out, cfg, use_ai=use_ai, retranscribe=fresh, replan=fresh,
@@ -788,9 +889,64 @@ class MainWindow(QMainWindow):
         self.summary.setText(appcore.summary_text(result))
         notes = result["plan"].notes
         self.notes_box.setText(("The AI asks you to check:\n• " + "\n• ".join(notes)) if notes else "")
+        self.show_thumbnails(result.get("thumbnails") or [])
         self.fresh.setChecked(False)
         self.pages.setCurrentIndex(2)
         QApplication.alert(self)
+
+    def show_thumbnails(self, paths: list[Path]):
+        while self.thumb_row.count():
+            w = self.thumb_row.takeAt(0).widget()
+            if w:
+                w.deleteLater()
+        if not paths:
+            self.thumb_row.addWidget(label("No thumbnails yet. Drag a screenshot into the Thumbnail box "
+                                           "and re-run, or click New thumbnail ideas.", "hint"))
+            return
+        for p in paths[-3:]:
+            self.thumb_row.addWidget(ThumbLabel(Path(p)))
+        self.thumb_row.addStretch(1)
+
+    def pick_series_logo(self):
+        from kdcut import thumbnails
+        series = self.series.currentText().strip()
+        if not series:
+            QMessageBox.information(self, APP_NAME, "Type the series name first.")
+            return
+        f, _ = QFileDialog.getOpenFileName(self, f"Logo for {series}", "", "Images (*.png *.webp)")
+        if not f:
+            return
+        cfg = self.cfg()
+        path = thumbnails.theme_path(cfg, series)
+        theme = thumbnails.Theme.load(path) or thumbnails.Theme(name=series)
+        theme.logo = f
+        theme.save(path)
+        self.statusBar().showMessage(f"Logo saved for {series}", 4000)
+
+    def remake_thumbnails(self):
+        if not self.out_dir:
+            return
+        proj = self.project()
+        shots = [Path(s) for s in proj.screenshots]
+        if not shots:
+            shots = sorted((self.out_dir / "thumbnail_frames").glob("frame_*.jpg"))[:3]
+        if not shots:
+            QMessageBox.information(self, APP_NAME, "Drag a screenshot into the Thumbnail box first "
+                                                    "(← Change something and re-run).")
+            return
+        self.more_thumbs.setEnabled(False)
+        self.more_thumbs.setText("Designing…")
+        cfg, video, use_ai = self.cfg(), self.video_info(proj), self.use_ai.isChecked()
+        bridge = self.thumb_bridge = Bridge()
+        bridge.done.connect(lambda paths: (self.show_thumbnails(paths), self._thumbs_idle()))
+        bridge.failed.connect(lambda e: (QMessageBox.warning(self, APP_NAME, f"Thumbnails failed: {e}"),
+                                         self._thumbs_idle()))
+        run_in_thread(bridge, lambda: pipeline.make_thumbnails(self.out_dir, cfg, video, shots, use_ai,
+                                                               log=lambda m: None))
+
+    def _thumbs_idle(self):
+        self.more_thumbs.setEnabled(True)
+        self.more_thumbs.setText("New thumbnail ideas")
 
     def on_failed(self, message: str):
         self.bar.setRange(0, 1000)

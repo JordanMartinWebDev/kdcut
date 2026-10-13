@@ -66,8 +66,11 @@ COLD_OPEN_RULES = (
 
 
 def generate(cfg: dict, video: dict, kept: list[Block], caller=llm.call_tool,
-             cold_open: bool = False) -> Metadata:
-    lines = [f"{b.id}{' [HIGHLIGHT]' if 'highlight' in b.flags else ''} {b.text}" for b in kept]
+             cold_open: bool = False, notes: dict[str, list[str]] | None = None) -> Metadata:
+    lines = []
+    for b in kept:
+        lines.append(f"{b.id}{' [HIGHLIGHT]' if 'highlight' in b.flags else ''} {b.text}")
+        lines += [f"      {n}" for n in (notes or {}).get(b.id, [])]
     system = (
         f"You write YouTube packaging for {cfg['channel'].get('name', 'a Minecraft channel')}, a "
         "Minecraft gaming channel. Match the creator's voice from the transcript. Be specific "
