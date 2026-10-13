@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -9,10 +10,10 @@ import threading
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, QUrl, Signal
+from PySide6.QtCore import QDateTime, QObject, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QFont, QGuiApplication, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateTimeEdit, QDialog, QDialogButtonBox, QFileDialog,
     QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QStackedWidget,
     QVBoxLayout, QWidget,
@@ -464,6 +465,26 @@ class SettingsDialog(QDialog):
         urow.addWidget(check_now)
         form.addRow("Updates", urow)
 
+        from kdcut import youtube
+        self.yt_status = label("", "hint")
+        yt_client = QPushButton("Choose client file…")
+        yt_client.clicked.connect(self.pick_yt_client)
+        self.yt_sign = QPushButton("Sign in")
+        self.yt_sign.clicked.connect(self.yt_sign_in_out)
+        ytr = QHBoxLayout()
+        ytr.addWidget(yt_client)
+        ytr.addWidget(self.yt_sign)
+        ytr.addStretch(1)
+        ybox = QVBoxLayout()
+        ybox.addLayout(ytr)
+        ybox.addWidget(self.yt_status)
+        guide = label('One-time setup (about 5 minutes): <a style="color:#7fd483" href="https://github.com/'
+                      'JordanMartinWebDev/kdcut#connecting-youtube">step-by-step guide</a>.', "hint")
+        guide.setOpenExternalLinks(True)
+        ybox.addWidget(guide)
+        form.addRow("YouTube", ybox)
+        self.refresh_yt()
+
         inner = QWidget()
         inner.setLayout(form)
         scroll = QScrollArea()
@@ -503,6 +524,54 @@ class SettingsDialog(QDialog):
         existing = [self.music_dirs.item(i).text() for i in range(self.music_dirs.count())]
         if d and str(Path(d)) not in existing:
             self.music_dirs.addItem(str(Path(d)))
+
+    def refresh_yt(self):
+        from kdcut import youtube
+        if not youtube.CLIENT_FILE.is_file():
+            self.yt_status.setText("Not set up: choose the client file you downloaded from Google Cloud.")
+            self.yt_sign.setEnabled(False)
+            self.yt_sign.setText("Sign in")
+        elif youtube.signed_in():
+            self.yt_status.setText("✔ Connected.")
+            self.yt_sign.setEnabled(True)
+            self.yt_sign.setText("Sign out")
+        else:
+            self.yt_status.setText("Client file saved. Click Sign in to connect your channel.")
+            self.yt_sign.setEnabled(True)
+            self.yt_sign.setText("Sign in")
+
+    def pick_yt_client(self):
+        from kdcut import youtube
+        f, _ = QFileDialog.getOpenFileName(self, "Google OAuth client file", "", "JSON (*.json)")
+        if not f:
+            return
+        try:
+            youtube.save_client_file(Path(f))
+        except Exception as exc:
+            QMessageBox.warning(self, APP_NAME, str(exc))
+        self.refresh_yt()
+
+    def yt_sign_in_out(self):
+        from kdcut import youtube
+        if youtube.signed_in():
+            youtube.sign_out()
+            self.refresh_yt()
+            return
+        self.yt_sign.setEnabled(False)
+        self.yt_status.setText("Finish signing in in your browser…")
+        bridge = self.yt_bridge = Bridge()
+
+        def ok(name):
+            self.refresh_yt()
+            self.yt_status.setText(f"✔ Connected to {name}.")
+
+        def bad(e):
+            self.refresh_yt()
+            QMessageBox.warning(self, APP_NAME, f"YouTube sign-in failed:\n{e}")
+
+        bridge.done.connect(ok)
+        bridge.failed.connect(bad)
+        run_in_thread(bridge, lambda: (youtube.sign_in(), youtube.channel_title())[1])
 
     def _pick_dir(self, field: QLineEdit, title: str):
         d = QFileDialog.getExistingDirectory(self, title, field.text())
@@ -601,6 +670,215 @@ class SettingsDialog(QDialog):
     def closeEvent(self, event):
         self.stop.set()
         super().closeEvent(event)
+
+
+# --------------------------------------------------------------------------------------
+# YouTube upload
+# --------------------------------------------------------------------------------------
+
+class UploadDialog(QDialog):
+    """Pick the exported video, check the details, upload as Private (or scheduled)."""
+
+    def __init__(self, parent, out_dir: Path, video: dict):
+        super().__init__(parent)
+        from kdcut import youtube
+        self.youtube = youtube
+        self.setWindowTitle("Upload to YouTube")
+        self.setMinimumWidth(760)
+        self.out_dir, self.video = out_dir, video
+        self.bridge = Bridge()
+        self.stop = threading.Event()
+        kit = {}
+        try:
+            kit = json.loads((out_dir / "upload_kit.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+        self.tags = kit.get("tags") or []
+
+        root = QVBoxLayout(self)
+        if not youtube.signed_in():
+            warn = label("⚠  Connect your YouTube channel first: Settings → YouTube.", "big")
+            warn.setStyleSheet("color:#e0b050;")
+            root.addWidget(warn)
+        form = QFormLayout()
+        form.setVerticalSpacing(10)
+
+        self.export = QLineEdit()
+        self.export.setPlaceholderText("The video you exported from DaVinci Resolve")
+        guess = sorted([p for p in out_dir.glob("*") if p.suffix.lower() in (".mp4", ".mov", ".mkv")
+                        and p.name != "music_bed.m4a"], key=lambda p: p.stat().st_mtime, reverse=True)
+        if guess:
+            self.export.setText(str(guess[0]))
+        browse = QPushButton("Browse…")
+        browse.clicked.connect(self.pick_export)
+        er = QHBoxLayout()
+        er.addWidget(self.export, 1)
+        er.addWidget(browse)
+        form.addRow("Exported video", er)
+
+        self.title = QComboBox()
+        self.title.setEditable(True)
+        self.title.addItems(kit.get("titles") or [video.get("title", "")])
+        self.title_len = label("", "hint", wrap=False)
+        self.title.currentTextChanged.connect(lambda t: self.title_len.setText(f"{len(t)}/100"))
+        self.title_len.setText(f"{len(self.title.currentText())}/100")
+        tr = QHBoxLayout()
+        tr.addWidget(self.title, 1)
+        tr.addWidget(self.title_len)
+        form.addRow("Title", tr)
+
+        self.desc = QPlainTextEdit(kit.get("description", ""))
+        self.desc.setFixedHeight(130)
+        dbox = QVBoxLayout()
+        dbox.addWidget(self.desc)
+        dbox.addWidget(label("Chapters are added under this automatically, timed to your export.", "hint"))
+        form.addRow("Description", dbox)
+
+        self.thumb = QComboBox()
+        thumbs = sorted((out_dir / "thumbnails").glob("thumbnail_*.jpg"),
+                        key=lambda p: p.stat().st_mtime, reverse=True)
+        for p in thumbs:
+            self.thumb.addItem(p.name, str(p))
+        self.thumb.addItem("Choose another image…", "__pick__")
+        self.thumb.addItem("No custom thumbnail", "")
+        self.thumb_preview = QLabel()
+        self.thumb_preview.setFixedSize(224, 126)
+        self.thumb.currentIndexChanged.connect(self.thumb_changed)
+        tbox = QHBoxLayout()
+        tbox.addWidget(self.thumb, 1)
+        tbox.addWidget(self.thumb_preview)
+        form.addRow("Thumbnail", tbox)
+
+        self.when = QComboBox()
+        self.when.addItem("Private (publish it yourself later)", "private")
+        self.when.addItem("Unlisted", "unlisted")
+        self.when.addItem("Schedule…", "schedule")
+        self.at = QDateTimeEdit(QDateTime.currentDateTime().addDays(1))
+        self.at.setCalendarPopup(True)
+        self.at.setDisplayFormat("ddd MMM d, yyyy  h:mm AP")
+        self.at.setEnabled(False)
+        self.when.currentIndexChanged.connect(lambda *_: self.at.setEnabled(self.when.currentData() == "schedule"))
+        wr = QHBoxLayout()
+        wr.addWidget(self.when, 1)
+        wr.addWidget(self.at)
+        form.addRow("Visibility", wr)
+
+        self.resync = QCheckBox("Rebuild captions and chapters from the exported video (recommended)")
+        self.resync.setChecked(True)
+        form.addRow("", self.resync)
+        root.addLayout(form)
+
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 1000)
+        self.bar.setVisible(False)
+        self.status = label("", "hint")
+        root.addWidget(self.bar)
+        root.addWidget(self.status)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.cancel_btn = QPushButton("Close")
+        self.cancel_btn.clicked.connect(self.close_or_cancel)
+        self.go = QPushButton("Upload")
+        self.go.setObjectName("primary")
+        self.go.clicked.connect(self.upload)
+        row.addWidget(self.cancel_btn)
+        row.addWidget(self.go)
+        root.addLayout(row)
+
+        self.bridge.log.connect(self.status.setText)
+        self.bridge.progress.connect(lambda f: self.bar.setValue(int(f * 1000)))
+        self.bridge.done.connect(self.done_upload)
+        self.bridge.failed.connect(self.failed_upload)
+        self.bridge.cancelled.connect(lambda: self.failed_upload("Upload cancelled."))
+        self.thumb_changed()
+
+    def pick_export(self):
+        f, _ = QFileDialog.getOpenFileName(self, "Exported video", str(self.out_dir),
+                                           "Videos (*.mp4 *.mov *.mkv *.m4v)")
+        if f:
+            self.export.setText(f)
+
+    def thumb_changed(self, *_):
+        data = self.thumb.currentData()
+        if data == "__pick__":
+            f, _ = QFileDialog.getOpenFileName(self, "Thumbnail", str(self.out_dir), "Images (*.jpg *.jpeg *.png)")
+            if f:
+                self.thumb.insertItem(0, Path(f).name, f)
+            self.thumb.setCurrentIndex(0)
+            return
+        pm = QPixmap(data) if data else QPixmap()
+        self.thumb_preview.setPixmap(pm.scaled(224, 126, Qt.AspectRatioMode.KeepAspectRatio,
+                                               Qt.TransformationMode.SmoothTransformation) if not pm.isNull() else QPixmap())
+
+    def upload(self):
+        export = Path(self.export.text().strip())
+        if not export.is_file():
+            QMessageBox.warning(self, APP_NAME, "Choose the video you exported from Resolve.")
+            return
+        if not self.youtube.signed_in():
+            QMessageBox.warning(self, APP_NAME, "Connect your YouTube channel in Settings → YouTube first.")
+            return
+        title = self.title.currentText().strip()
+        if not title:
+            QMessageBox.warning(self, APP_NAME, "Give the video a title.")
+            return
+        thumb = self.thumb.currentData() or None
+        if thumb and Path(thumb).suffix.lower() == ".png":
+            from PIL import Image   # YouTube wants a JPEG under 2 MB
+            jpg = self.out_dir / "thumbnails" / (Path(thumb).stem + "_upload.jpg")
+            Image.open(thumb).convert("RGB").resize((1280, 720)).save(jpg, quality=90)
+            thumb = str(jpg)
+        privacy, publish_at = self.when.currentData(), None
+        if privacy == "schedule":
+            when = self.at.dateTime().toUTC()
+            if when <= QDateTime.currentDateTimeUtc():
+                QMessageBox.warning(self, APP_NAME, "Pick a time in the future.")
+                return
+            publish_at = when.toString("yyyy-MM-ddTHH:mm:ss") + "Z"
+            privacy = "private"
+        cfg = config.load()
+        args = dict(title=title, description=self.desc.toPlainText(), tags=self.tags,
+                    thumbnail=Path(thumb) if thumb else None, privacy=privacy, publish_at=publish_at,
+                    resync=self.resync.isChecked())
+        self.go.setEnabled(False)
+        self.cancel_btn.setText("Cancel upload")
+        self.bar.setVisible(True)
+        self.bar.setValue(0)
+        self.stop.clear()
+        from kdcut import publish
+        run_in_thread(self.bridge, lambda: publish.publish(
+            self.out_dir, export, cfg, log=self.bridge.log.emit, progress=self.bridge.progress.emit,
+            cancelled=self.stop.is_set, **args), self.stop)
+
+    def done_upload(self, rec: dict):
+        self.cancel_btn.setText("Close")
+        self.go.setEnabled(True)
+        extra = ("\n\nNotes:\n• " + "\n• ".join(rec["warnings"])) if rec["warnings"] else ""
+        when = (f"scheduled for {self.at.dateTime().toString('ddd MMM d, h:mm AP')}" if rec["publish_at"]
+                else rec["privacy"])
+        box = QMessageBox(self)
+        box.setWindowTitle(APP_NAME)
+        box.setText(f"Uploaded ({when}).\n\nCheck it in YouTube Studio, then publish when you're happy.{extra}")
+        studio = box.addButton("Open in YouTube Studio", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Close", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is studio:
+            QDesktopServices.openUrl(QUrl(rec["studio"]))
+        self.accept()
+
+    def failed_upload(self, message: str):
+        self.cancel_btn.setText("Close")
+        self.go.setEnabled(True)
+        self.bar.setVisible(False)
+        self.status.setText("")
+        QMessageBox.warning(self, APP_NAME, message)
+
+    def close_or_cancel(self):
+        if not self.go.isEnabled():
+            self.stop.set()
+            self.status.setText("Cancelling…")
+        else:
+            self.reject()
 
 
 # --------------------------------------------------------------------------------------
@@ -823,6 +1101,8 @@ class MainWindow(QMainWindow):
             ("Open upload kit", "Titles, description, chapters, tags", lambda: self.open_out("upload_kit.md")),
             ("Copy best title", "", lambda: self.copy_kit("title")),
             ("Copy description + chapters", "", lambda: self.copy_kit("description")),
+            ("Upload to YouTube…", "Private or scheduled, with title, chapters, captions, thumbnail",
+             self.open_upload),
             ("Open video folder", "Everything for this video", lambda: open_path(self.out_dir)),
         ]
         for i, (text, hint, fn) in enumerate(buttons):
@@ -1082,6 +1362,10 @@ class MainWindow(QMainWindow):
         bridge.done.connect(downloaded)
         bridge.failed.connect(failed)
         run_in_thread(bridge, lambda: updater.download(upd, bridge.progress.emit))
+
+    def open_upload(self):
+        if self.out_dir:
+            UploadDialog(self, self.out_dir, self.video_info(self.project())).exec()
 
     def pick_series_logo(self):
         from kdcut import thumbnails

@@ -79,6 +79,40 @@ you can swap in Resolve.
 Every build also writes `captions.srt`, timed to the edit. Resolve can import it as subtitles, and
 YouTube accepts it as captions.
 
+## Uploading to YouTube
+
+When your edit is done, export it from Resolve, then click **Upload to YouTube…** on the results
+screen. Pick the export, choose a title and thumbnail, and pick **Private**, **Unlisted** or
+**Schedule**. KDcut then:
+
+1. listens to the exported video so the captions and chapter times match your final cut, even
+   if you changed things in Resolve
+2. uploads it (resumable, so a dropped connection doesn't start over) in the Gaming category,
+   marked "not made for kids"
+3. sets the thumbnail and adds the captions
+
+Then you check it in YouTube Studio and press Publish.
+
+### Connecting YouTube
+
+This is a one-time setup that takes about 5 minutes. YouTube only lets apps upload through a Google
+Cloud project you own; it's free.
+
+1. Go to <https://console.cloud.google.com>, create a project (name it "KDcut").
+2. **APIs & Services → Library**, search **YouTube Data API v3**, and click **Enable**.
+3. **Google Auth Platform** (or "OAuth consent screen"): choose **External**, name it KDcut, and use your
+   email. Under **Audience**, add your Google account as a test user.
+4. **Clients → Create client → Desktop app**. Download the JSON file.
+5. In KDcut: **Settings → YouTube → Choose client file…**, pick that JSON, then **Sign in** and
+   approve in the browser. Pick the Google account (or brand account) that owns your channel.
+
+Two things to know:
+- While the app is in **Testing**, Google signs you out every 7 days, and you click Sign in again.
+  To avoid that, click **Publish app** on the Audience page. Google will then show an "unverified app"
+  warning when you sign in, which you can pass with **Advanced → Go to KDcut**. That's expected for a
+  private tool only you use.
+- Custom thumbnails need a verified channel (phone verification at youtube.com/verify).
+
 ## Letting the AI look at the footage
 
 With **Let the AI look at the footage** ticked, KDcut finds stretches where you weren't talking,
@@ -262,5 +296,5 @@ whole pipeline, including that every cut in the FCPXML lands on a whole frame.
 - [x] Background music from your own licensed library, picked per section
 - [x] Music ducking under your voice
 - [x] Captions (.srt) timed to the edit
-- [ ] Upload to YouTube as private with the metadata filled in
+- [x] Upload to YouTube as private or scheduled, with title, chapters, captions and thumbnail
 - [x] Desktop app with drag and drop, and a Windows installer built by GitHub Actions

@@ -48,6 +48,8 @@ def run(out_file: Path) -> int:
         w.show()
         d = gui.SettingsDialog(w)
         d.collect()
+        up = gui.UploadDialog(w, tmp, {"title": "x"})
+        up.close()
         app.processEvents()
         w.close()
         d.close()
