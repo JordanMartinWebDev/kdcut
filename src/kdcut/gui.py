@@ -608,9 +608,17 @@ class MainWindow(QMainWindow):
         logo_btn = QPushButton("Series logo…")
         logo_btn.setToolTip("A transparent PNG of the series logo. It goes on every thumbnail in this series.")
         logo_btn.clicked.connect(self.pick_series_logo)
+        self.ep_style = QComboBox()
+        for text, value in [("Ribbon under logo", "ribbon"), ("Number in corner", "corner"),
+                            ("Tag behind logo", "hang_tag"), ("No number", "none")]:
+            self.ep_style.addItem(text, value)
+        self.ep_style.setToolTip("How the episode number appears on this series' thumbnails")
+        self.ep_style.activated.connect(self.save_ep_style)
+        self.series.currentTextChanged.connect(self.load_ep_style)
         srow = QHBoxLayout()
         srow.addWidget(self.series, 1)
         srow.addWidget(logo_btn)
+        srow.addWidget(self.ep_style)
         srow.addWidget(label("Episode", "section", wrap=False))
         srow.addWidget(self.episode)
         grid.addWidget(label("Series", "section", wrap=False), 2, 0)
@@ -906,6 +914,29 @@ class MainWindow(QMainWindow):
         for p in paths[-3:]:
             self.thumb_row.addWidget(ThumbLabel(Path(p)))
         self.thumb_row.addStretch(1)
+
+    def _series_theme(self):
+        from kdcut import thumbnails
+        series = self.series.currentText().strip()
+        path = thumbnails.theme_path(self.cfg(), series)
+        return path, thumbnails.Theme.load(path) or thumbnails.Theme(name=series)
+
+    def load_ep_style(self, *_):
+        _, theme = self._series_theme()
+        value = theme.badge_style if theme.badge else "none"
+        self.ep_style.setCurrentIndex(max(self.ep_style.findData(value), 0))
+
+    def save_ep_style(self, *_):
+        if not self.series.currentText().strip():
+            return
+        path, theme = self._series_theme()
+        value = self.ep_style.currentData()
+        if value == "none":
+            theme.badge = ""
+        else:
+            theme.badge = theme.badge or "EP {n}"
+            theme.badge_style = value
+        theme.save(path)
 
     def pick_series_logo(self):
         from kdcut import thumbnails

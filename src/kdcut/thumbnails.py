@@ -53,7 +53,7 @@ class Theme:
     edge_bar: bool = True
     logo: str = ""                # series logo PNG (transparent), shown bottom-left
     designed: bool = False        # False until the AI has picked colours and font
-    badge_style: str = "medallion"  # how the episode number looks: medallion | stamp | ribbon | tab
+    badge_style: str = "ribbon"   # episode number: corner | hang_tag | ribbon | medallion | stamp | tab
 
     @classmethod
     def load(cls, path: Path) -> "Theme | None":
@@ -336,7 +336,7 @@ def _arrow(draw: ImageDraw.ImageDraw, start, end, color, width: int = 26):
         draw.polygon(head, fill=col)
 
 
-BADGE_STYLES = ("medallion", "stamp", "ribbon", "tab")
+BADGE_STYLES = ("corner", "hang_tag", "ribbon", "medallion", "stamp", "tab")
 
 
 def _word(label: str, size: int, font_path: Path | None, fill, stroke, stroke_w: int) -> Image.Image:
@@ -391,17 +391,20 @@ def _episode_mark(theme: Theme, episode, font_path: Path | None, ref_h: int) -> 
         g.rectangle([fold, 0, w - fold, h], fill=_hex(theme.primary), outline=dark, width=4 * ss)
         g.line([(fold + 8 * ss, 7 * ss), (w - fold - 8 * ss, 7 * ss)], fill=(255, 255, 255, 110), width=3 * ss)
         im.alpha_composite(label, ((w - label.width) // 2, (h - label.height) // 2))
-    else:  # "tab": the simple rounded pill
+    elif style == "corner":   # the number on its own, big and outlined
+        im = _word(f"#{n}", int(ref_h * .80) * ss, font_path, _hex(theme.text), dark, 9 * ss)
+    else:  # "tab" / "hang_tag": a rounded tag
+        size = .60 if style == "hang_tag" else .30
         label = _word(theme.badge.replace("{n}", n) if theme.badge else f"EP {n}",
-                      int(ref_h * .30) * ss, font_path, white, dark, 3 * ss)
+                      int(ref_h * size) * ss, font_path, white, dark, 4 * ss)
         pad_x, pad_y = label.height // 2 + 6 * ss, label.height // 4 + 4 * ss
         im = Image.new("RGBA", (label.width + pad_x * 2, label.height + pad_y * 2), (0, 0, 0, 0))
         ImageDraw.Draw(im).rounded_rectangle([0, 0, im.width - 1, im.height - 1], radius=im.height // 3,
                                              fill=_hex(theme.primary), outline=white, width=4 * ss)
         im.alpha_composite(label, (pad_x, pad_y))
-    if style != "medallion":
-        pass
-    f = 1 / ss if style != "medallion" else 1 / ss
+        if style == "hang_tag":
+            im = im.rotate(-9, expand=True, resample=Image.BICUBIC)
+    f = 1 / ss
     return _resize(im, (max(1, int(im.width * f)), max(1, int(im.height * f))))
 
 
@@ -416,14 +419,22 @@ def _brand(theme: Theme, episode, font_path: Path | None) -> Image.Image | None:
     if logo is None and not has_ep:
         return None
     ref_h = logo.height if logo is not None else int(H * 0.15)
+    style = theme.badge_style if theme.badge_style in BADGE_STYLES else "medallion"
+    if style == "corner" and logo is not None:
+        has_ep = False                 # drawn separately, in its own corner
     mark = _episode_mark(theme, episode, font_path, ref_h) if has_ep else None
     if logo is None:
         unit = mark
     elif mark is None:
         unit = logo
     else:
-        style = theme.badge_style if theme.badge_style in BADGE_STYLES else "medallion"
-        if style == "medallion":      # sticker overlapping the logo's top-right corner
+        if style == "hang_tag":       # tag tucked behind the logo, hanging off its right end
+            ox = logo.width - int(mark.width * 0.16)
+            oy = int(logo.height * 0.50)
+            unit = Image.new("RGBA", (ox + mark.width, max(logo.height, oy + mark.height)), (0, 0, 0, 0))
+            unit.alpha_composite(mark, (ox, oy))
+            unit.alpha_composite(logo, (0, 0))
+        elif style == "medallion":      # sticker overlapping the logo's top-right corner
             ox = logo.width - int(mark.width * 0.12)
             unit = Image.new("RGBA", (ox + mark.width, logo.height + int(mark.height * 0.25)), (0, 0, 0, 0))
             unit.alpha_composite(logo, (0, unit.height - logo.height))
@@ -454,8 +465,12 @@ def _overlap(a: Rect, b: Rect) -> int:
     return max(w, 0) * max(h, 0)
 
 
-def _place(size: tuple[int, int], preferred: str, obstacles: list[Rect], margin: int = 22) -> tuple[int, int]:
-    """Put a box in the preferred corner, or the corner that collides least."""
+def _place(size: tuple[int, int], preferred: str, obstacles: list[Rect], margin: int = 22,
+           mask: Image.Image | None = None, low: int = 0) -> tuple[int, int]:
+    """Put a box in the preferred corner, or the spot that collides least.
+
+    `mask` marks the character's actual pixels (so empty space around a pose is usable);
+    `low` adds spots just under the top corners (below a corner episode number)."""
     w, h = size
     spots = {
         "top-left": (margin, margin),
@@ -463,6 +478,9 @@ def _place(size: tuple[int, int], preferred: str, obstacles: list[Rect], margin:
         "bottom-left": (margin, H - h - margin),
         "bottom-right": (W - w - margin, H - h - 105),     # lifted above the timestamp
     }
+    if low:
+        spots["top-left-low"] = (margin, margin + low)
+        spots["top-right-low"] = (W - w - margin, margin + low)
     order = [preferred] + [k for k in spots if k != preferred]
     best, best_cost = spots[order[0]] if order[0] in spots else spots["bottom-left"], None
     for name in order:
@@ -471,6 +489,8 @@ def _place(size: tuple[int, int], preferred: str, obstacles: list[Rect], margin:
         x, y = spots[name]
         r = (x, y, x + w, y + h)
         cost = sum(_overlap(r, o) for o in obstacles) + _overlap(r, TIMESTAMP_ZONE) * 10
+        if mask is not None:
+            cost += int(ImageStat.Stat(mask.crop(r)).sum[0] / 255) * 2
         if cost == 0:
             return x, y
         if best_cost is None or cost < best_cost:
@@ -509,6 +529,7 @@ def render(concept: Concept, background: Path, theme: Theme, *, font_path: Path 
         canvas.alpha_composite(Image.merge("RGBA", (zeros, zeros, zeros, vig)))
 
     obstacles: list[Rect] = []
+    char_mask = Image.new("L", (W, H), 0)
 
     # Character, opposite the text. Smaller in the "top" layout so the words get the width.
     char_box, char_layer = None, None
@@ -525,7 +546,7 @@ def render(concept: Concept, background: Path, theme: Theme, *, font_path: Path 
         y = H - sticker.height + 60
         char_box = (x + 30, y + 30, x + sticker.width - 30, H)
         char_layer = (sticker, (x, y))
-        obstacles.append(char_box)
+        char_mask.paste(sticker.getchannel("A"), (x, y))
 
     # Ring around the key thing in the screenshot (skipped if the character would hide it).
     focus_xy = None
@@ -542,11 +563,21 @@ def render(concept: Concept, background: Path, theme: Theme, *, font_path: Path 
     if char_layer:
         canvas.alpha_composite(*char_layer)
 
+    # Episode number on its own ("corner" style): it gets the top corner on the text side,
+    # and the words move down to make room.
+    corner_num = None
+    if theme.badge_style == "corner" and theme.badge and episode not in (None, ""):
+        corner_num = _outlined(_episode_mark(theme, episode, font_path, int(H * 0.15)), 0, shadow=10)
+        nx = 18 if left else W - corner_num.width - 18
+        canvas.alpha_composite(corner_num, (nx, 10))
+        obstacles.append((nx, 10, nx + corner_num.width, 10 + corner_num.height))
+
     # The words.
     text = concept.text.upper()
     wants_icons = bool(icons and any(n in icons for n in concept.icons))
     if layout == "top":
-        max_w, max_h = int(W * 0.92), int(H * 0.30)
+        max_w = int(W * 0.92) - (2 * corner_num.width + 20 if corner_num else 0)
+        max_h = int(H * 0.30)
     else:
         max_w = int(W * (0.56 if has_char else 0.62))
         max_h = int(H * (0.36 if wants_icons else 0.46))
@@ -561,6 +592,8 @@ def render(concept: Concept, background: Path, theme: Theme, *, font_path: Path 
         ty = H - layer.height - (40 if left else 120)       # stay above the timestamp on the right
     else:
         tx, ty = (30 if left else W - layer.width - 30), 34
+        if corner_num is not None:
+            ty = 10 + corner_num.height - 14
     canvas.alpha_composite(layer, (tx, ty))
     text_box = (tx + 20, ty + 20, tx + layer.width - 20, ty + layer.height - 20)
     obstacles.append(text_box)
@@ -628,7 +661,10 @@ def render(concept: Concept, background: Path, theme: Theme, *, font_path: Path 
         default = {"side": "bottom-left" if left else "top-left",
                    "top": "bottom-left" if left else "bottom-right",
                    "bottom": "top-left" if left else "top-right"}[layout]
-        canvas.alpha_composite(brand, _place(brand.size, concept.brand_corner or default, obstacles))
+        bx, by = _place(brand.size, concept.brand_corner or default, obstacles, mask=char_mask,
+                        low=(corner_num.height + 6) if corner_num is not None else 0)
+        canvas.alpha_composite(brand, (bx, by))
+        obstacles.append((bx, by, bx + brand.width, by + brand.height))
     return canvas.convert("RGB")
 
 
@@ -691,7 +727,9 @@ def make(cfg: dict, video: dict, screenshots: list[Path], out_dir: Path, *, titl
                 theme = Theme(name=series or cfg["channel"].get("name", ""),
                               primary=t.get("primary", Theme.primary), accent=t.get("accent", Theme.accent),
                               font=t.get("font", "") if t.get("font") in fonts else "",
-                              badge=t.get("badge", "EP {n}"), tilt=float(t.get("tilt", -3)),
+                              badge=theme.badge if theme else t.get("badge", "EP {n}"),
+                              badge_style=theme.badge_style if theme else Theme.badge_style,
+                              tilt=float(t.get("tilt", -3)),
                               logo=theme.logo if theme else "", designed=True)
                 theme.save(tpath)
                 log(f"Designed a thumbnail style for '{theme.name}' (reused for every episode)")
