@@ -49,6 +49,8 @@ thumbnails using:
 - **series branding**: your series logo (the **Series logo…** button), episode badge, and
   accent colours
 
+Every video gets a different composition: words beside a big character, a wide banner across
+the top, or low words with icons above. The logo and episode tab go in whichever corner is free.
 The first time a series gets thumbnails, the AI designs its style (colours and font, matched to
 your logo and character) and saves it, so every later episode looks consistent. The bottom-right
 corner is kept clear because YouTube puts the video length there. Click **New thumbnail ideas**

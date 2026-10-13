@@ -87,7 +87,17 @@ class Concept:
     focus: dict | None = None           # {"x": 0-1, "y": 0-1} in the screenshot
     ring: bool = False
     arrow: bool = False
+    layout: str = "side"                # side | top | bottom
+    brand_corner: str = ""              # top-left | top-right | bottom-left | bottom-right
     why: str = ""
+
+
+LAYOUTS = {
+    "side": "words in the top corner on one side, character big on the other side",
+    "top": "words in one wide banner across the top, character smaller in a bottom corner, "
+           "icons on the open side",
+    "bottom": "words low on one side, character on the other side, icons above the words",
+}
 
 
 SYSTEM = """You design YouTube thumbnails for a Minecraft let's-play channel.
@@ -99,7 +109,11 @@ Rules that make thumbnails get clicked:
 - Icons only if they tell the story at a glance (the item found, the mob fought). Max 2.
 - Use a ring + arrow only when the screenshot has a specific thing worth pointing at.
 - The character pose should match the emotion (shocked, celebrating, scared, pointing).
-- Make the 3 concepts genuinely different (different words, sides or emotion).
+- The series style (colours, font, logo, episode tab) stays the same every video, but the
+  composition should change from video to video. Pick a layout per concept and make the
+  3 concepts genuinely different (layout, side, words, emotion).
+- Put the logo + episode tab (brand_corner) where it won't cover the character, the words or
+  the focus point. Never the bottom-right (YouTube's timestamp).
 """
 
 THEME_RULES = """No style exists yet for this series, so also design one ("theme"). It is reused
@@ -123,8 +137,11 @@ def concept_schema(want_theme: bool) -> dict:
             "description": "Most interesting point in the screenshot, 0-1 coordinates."},
         "ring": {"type": "boolean"},
         "arrow": {"type": "boolean"},
+        "layout": {"type": "string", "enum": list(LAYOUTS),
+                   "description": "; ".join(f"{k}: {v}" for k, v in LAYOUTS.items())},
+        "brand_corner": {"type": "string", "enum": ["top-left", "top-right", "bottom-left"]},
         "why": {"type": "string"},
-    }, "required": ["background", "text", "text_side"]}
+    }, "required": ["background", "text", "text_side", "layout"]}
     props = {"concepts": {"type": "array", "items": concept, "minItems": 1, "maxItems": 3}}
     required = ["concepts"]
     if want_theme:
@@ -283,8 +300,8 @@ def _split(text: str) -> list[str]:
 
 
 def _fit_text(text: str, font_path: Path | None, max_w: int, max_h: int, theme: Theme,
-              highlight: str) -> Image.Image:
-    lines = _split(text)
+              highlight: str, one_line: bool = False) -> Image.Image:
+    lines = [text] if one_line else _split(text)
     lo, hi = 40, 260
     best = None
     while lo <= hi:
@@ -318,9 +335,79 @@ def _arrow(draw: ImageDraw.ImageDraw, start, end, color, width: int = 26):
         draw.polygon(head, fill=col)
 
 
+def _brand(theme: Theme, episode, font_path: Path | None) -> Image.Image | None:
+    """Series logo with the episode tab tucked underneath it, as one unit."""
+    logo = None
+    if theme.logo and Path(theme.logo).exists():
+        logo = _rgba(Path(theme.logo))
+        f = min(W * 0.30 / logo.width, H * 0.16 / logo.height)
+        logo = _resize(logo, (max(1, int(logo.width * f)), max(1, int(logo.height * f))))
+    tab = None
+    if theme.badge and episode not in (None, ""):
+        label = theme.badge.replace("{n}", str(episode))
+        size = 40 if logo is not None else 58
+        fnt = _font(font_path, size)
+        box = fnt.getbbox(label, stroke_width=3)
+        tw, th = box[2] - box[0], box[3] - box[1]
+        pad_x, pad_y = int(size * 0.55), int(size * 0.3)
+        tab = Image.new("RGBA", (tw + pad_x * 2 + 10, th + pad_y * 2 + 10), (0, 0, 0, 0))
+        d = ImageDraw.Draw(tab)
+        d.rounded_rectangle([5, 5, tab.width - 5, tab.height - 5], radius=int(size * 0.35),
+                            fill=_hex(theme.primary), outline=(255, 255, 255, 255), width=5)
+        d.text((5 + pad_x - box[0], 5 + pad_y - box[1]), label, font=fnt, fill=_hex(theme.text),
+               stroke_width=3, stroke_fill=_hex(theme.stroke))
+    if logo is None and tab is None:
+        return None
+    if logo is None:
+        unit = tab
+    elif tab is None:
+        unit = logo
+    else:
+        gap = 2
+        unit = Image.new("RGBA", (max(logo.width, tab.width), logo.height + gap + tab.height), (0, 0, 0, 0))
+        unit.alpha_composite(logo, ((unit.width - logo.width) // 2, 0))
+        unit.alpha_composite(tab, ((unit.width - tab.width) // 2, logo.height + gap))
+    return _outlined(unit, 0, shadow=10)
+
+
+Rect = tuple[int, int, int, int]
+TIMESTAMP_ZONE: Rect = (W - 210, H - 95, W, H)   # where YouTube draws the video length
+
+
+def _overlap(a: Rect, b: Rect) -> int:
+    w = min(a[2], b[2]) - max(a[0], b[0])
+    h = min(a[3], b[3]) - max(a[1], b[1])
+    return max(w, 0) * max(h, 0)
+
+
+def _place(size: tuple[int, int], preferred: str, obstacles: list[Rect], margin: int = 22) -> tuple[int, int]:
+    """Put a box in the preferred corner, or the corner that collides least."""
+    w, h = size
+    spots = {
+        "top-left": (margin, margin),
+        "top-right": (W - w - margin, margin),
+        "bottom-left": (margin, H - h - margin),
+        "bottom-right": (W - w - margin, H - h - 105),     # lifted above the timestamp
+    }
+    order = [preferred] + [k for k in spots if k != preferred]
+    best, best_cost = spots[order[0]] if order[0] in spots else spots["bottom-left"], None
+    for name in order:
+        if name not in spots:
+            continue
+        x, y = spots[name]
+        r = (x, y, x + w, y + h)
+        cost = sum(_overlap(r, o) for o in obstacles) + _overlap(r, TIMESTAMP_ZONE) * 10
+        if cost == 0:
+            return x, y
+        if best_cost is None or cost < best_cost:
+            best, best_cost = (x, y), cost
+    return best
+
+
 def render(concept: Concept, background: Path, theme: Theme, *, font_path: Path | None = None,
            icons: dict[str, Path] | None = None, characters: dict[str, Path] | None = None,
            episode: str | int | None = None) -> Image.Image:
+    layout = concept.layout if concept.layout in LAYOUTS else "side"
     src = Image.open(background).convert("RGB")
     centering = (0.5, 0.5)
     if concept.focus:
@@ -331,21 +418,31 @@ def render(concept: Concept, background: Path, theme: Theme, *, font_path: Path 
     bg = ImageEnhance.Contrast(bg).enhance(theme.contrast)
     bg = ImageEnhance.Sharpness(bg).enhance(1.4)
     canvas = bg.convert("RGBA")
-    left = concept.text_side != "right"
+    left = concept.text_side != "right"          # text side; the character goes opposite
+    zeros = Image.new("L", (W, H), 0)
 
-    # Darken behind the text and around the edges so everything on top pops.
-    grad = Image.linear_gradient("L").rotate(90 if left else -90).resize((W, H))
-    grad = grad.point(lambda v: int(max(0, v - 90) * 0.85))
-    canvas.alpha_composite(Image.merge("RGBA", (*[Image.new("L", (W, H), 0)] * 3, grad)))
+    # Darken behind the text so it pops.
+    if layout == "side":
+        shade = Image.linear_gradient("L").rotate(90 if left else -90).resize((W, H))
+    elif layout == "top":
+        shade = Image.linear_gradient("L").rotate(180).resize((W, H))
+    else:
+        shade = Image.linear_gradient("L").resize((W, H))
+    shade = shade.point(lambda v: int(max(0, v - 90) * 0.85))
+    canvas.alpha_composite(Image.merge("RGBA", (zeros, zeros, zeros, shade)))
     if theme.vignette > 0:
         vig = Image.radial_gradient("L").resize((W, H)).point(lambda v: int(max(0, v - 120) * theme.vignette * 1.6))
-        canvas.alpha_composite(Image.merge("RGBA", (*[Image.new("L", (W, H), 0)] * 3, vig)))
+        canvas.alpha_composite(Image.merge("RGBA", (zeros, zeros, zeros, vig)))
 
-    # Character on the side opposite the text.
+    obstacles: list[Rect] = []
+
+    # Character, opposite the text. Smaller in the "top" layout so the words get the width.
     char_box, char_layer = None, None
-    if concept.character and characters and concept.character in characters:
+    has_char = bool(concept.character and characters and concept.character in characters)
+    if has_char:
         char = _rgba(characters[concept.character])
-        f = min(H * 0.96 / char.height, W * 0.46 / char.width)   # wide poses stay on their side
+        height = 0.80 if layout == "top" else 0.96
+        f = min(H * height / char.height, W * (0.40 if layout == "top" else 0.46) / char.width)
         char = _resize(char, (max(1, int(char.width * f)), max(1, int(char.height * f))))
         if not left:
             char = ImageOps.mirror(char)
@@ -354,9 +451,9 @@ def render(concept: Concept, background: Path, theme: Theme, *, font_path: Path 
         y = H - sticker.height + 60
         char_box = (x + 30, y + 30, x + sticker.width - 30, H)
         char_layer = (sticker, (x, y))
+        obstacles.append(char_box)
 
-    # Ring + arrow pointing at the key thing in the screenshot (focus is in screenshot space;
-    # after the crop it lands roughly where `centering` put it).
+    # Ring around the key thing in the screenshot (skipped if the character would hide it).
     focus_xy = None
     if concept.focus and (concept.ring or concept.arrow):
         sw, sh = src.size
@@ -368,86 +465,96 @@ def render(concept: Concept, background: Path, theme: Theme, *, font_path: Path 
         covered = char_box and char_box[0] - 100 < fx < char_box[2] + 100 and fy > char_box[1] - 100
         if 60 < fx < W - 60 and 60 < fy < H - 60 and not covered:
             focus_xy = (fx, fy)
-            if concept.ring:
-                d = ImageDraw.Draw(canvas)
-                r = 95
-                d.ellipse([fx - r - 9, fy - r - 9, fx + r + 9, fy + r + 9], outline=(255, 255, 255, 255), width=30)
-                d.ellipse([fx - r, fy - r, fx + r, fy + r], outline=(235, 40, 40, 255), width=14)
-
     if char_layer:
         canvas.alpha_composite(*char_layer)
 
     # The words.
     text = concept.text.upper()
-    has_char = bool(concept.character and characters and concept.character in characters)
-    max_w = int(W * (0.56 if has_char else 0.62))
     wants_icons = bool(icons and any(n in icons for n in concept.icons))
-    layer = _fit_text(text, font_path, max_w, int(H * (0.36 if wants_icons else 0.46)), theme,
-                      concept.highlight)
+    if layout == "top":
+        max_w, max_h = int(W * 0.92), int(H * 0.30)
+    else:
+        max_w = int(W * (0.56 if has_char else 0.62))
+        max_h = int(H * (0.36 if wants_icons else 0.46))
+    layer = _fit_text(text, font_path, max_w, max_h, theme, concept.highlight,
+                      one_line=layout == "top" and len(text) <= 22)
     if theme.tilt:
         layer = layer.rotate(theme.tilt, expand=True, resample=Image.BICUBIC)
-    tx = 30 if left else W - layer.width - 30
-    ty = 34
+    if layout == "top":
+        tx, ty = (W - layer.width) // 2, 18
+    elif layout == "bottom":
+        tx = 30 if left else W - layer.width - 30
+        ty = H - layer.height - (40 if left else 120)       # stay above the timestamp on the right
+    else:
+        tx, ty = (30 if left else W - layer.width - 30), 34
     canvas.alpha_composite(layer, (tx, ty))
+    text_box = (tx + 20, ty + 20, tx + layer.width - 20, ty + layer.height - 20)
+    obstacles.append(text_box)
 
-    # Icons under the text.
+    if focus_xy:
+        fx, fy = focus_xy
+        ring_box = (int(fx - 110), int(fy - 110), int(fx + 110), int(fy + 110))
+        if _overlap(ring_box, text_box) > 0:     # the words landed on it: don't point at it
+            focus_xy = None
+        else:
+            if concept.ring:
+                d = ImageDraw.Draw(canvas)
+                r = 95
+                d.ellipse([fx - r - 9, fy - r - 9, fx + r + 9, fy + r + 9], outline=(255, 255, 255, 255), width=30)
+                d.ellipse([fx - r, fy - r, fx + r, fy + r], outline=(235, 40, 40, 255), width=14)
+            obstacles.append(ring_box)
+
+    # Icons: under the text (side), beside the character (top), above the text (bottom).
     used = [icons[n] for n in concept.icons if icons and n in icons][:2]
-    cursor = tx + 30 if left else tx + layer.width - 30
-    iy = ty + layer.height + 4
-    logo_img = None
-    if theme.logo and Path(theme.logo).exists():
-        logo_img = _rgba(Path(theme.logo))
-        f = min(W * 0.34 / logo_img.width, H * 0.2 / logo_img.height)
-        logo_img = _resize(logo_img, (max(1, int(logo_img.width * f)), max(1, int(logo_img.height * f))))
-        logo_img = _outlined(logo_img, 0, shadow=10)
-    reserved = max(150 if theme.badge and episode not in (None, "") else 30,
-                   (logo_img.height + 10) if logo_img is not None else 0)
-    bottom_limit = H - reserved
-    room = bottom_limit - iy - 80          # 80 = outline, shadow and rotation padding
-    target = min(230, room)
-    if target < 110:                        # no space under the text: skip icons
+    if layout == "side":
+        room = H - 150 - (ty + layer.height)
+    elif layout == "top":
+        room = H - (ty + layer.height) - 60
+    else:
+        room = ty - 60
+    target = min(230, room - 80)
+    if target < 110:
         used = []
+    cursor = (tx + 30) if left else (tx + layer.width - 30)
     for k, path in enumerate(used):
         icon = _rgba(path)
         f = target / max(icon.size)
         icon = _resize(icon, (max(1, int(icon.width * f)), max(1, int(icon.height * f))),
                        Image.NEAREST if max(icon.size) <= 256 else Image.LANCZOS)
         icon = _outlined(icon.rotate(-10 if k == 0 else 12, expand=True, resample=Image.BICUBIC), 7)
-        if not left:
-            cursor -= icon.width
-        y = min(iy, bottom_limit - icon.height)
-        canvas.alpha_composite(icon, (int(cursor), int(y)))
-        cursor += (icon.width - 30) if left else 30
+        if layout == "top":
+            ix = (W * 0.36 + k * (icon.width - 20)) if left else (W * 0.64 - icon.width - k * (icon.width - 20))
+            iy = ty + layer.height + max(0, (room - icon.height) // 2)
+        elif layout == "bottom":
+            ix = cursor if left else cursor - icon.width
+            iy = ty - icon.height + 30
+        else:
+            ix = cursor if left else cursor - icon.width
+            iy = min(ty + layer.height + 4, H - 150 - icon.height)
+        canvas.alpha_composite(icon, (int(ix), int(iy)))
+        obstacles.append((int(ix) + 20, int(iy) + 20, int(ix) + icon.width - 20, int(iy) + icon.height - 20))
+        if layout != "top":
+            cursor += (icon.width - 30) if left else -(icon.width - 30)
 
     if focus_xy and concept.arrow:
-        start = (tx + layer.width * (0.85 if left else 0.15), ty + layer.height * 0.8)
-        dx, dy = focus_xy[0] - start[0], focus_xy[1] - start[1]
+        sx = text_box[2] - 40 if focus_xy[0] > (text_box[0] + text_box[2]) / 2 else text_box[0] + 40
+        sy = text_box[3] - 10 if focus_xy[1] > text_box[3] else text_box[1] + 10
+        dx, dy = focus_xy[0] - sx, focus_xy[1] - sy
         dist = math.hypot(dx, dy) or 1
         end = (focus_xy[0] - dx / dist * 115, focus_xy[1] - dy / dist * 115)
         if dist > 220:
-            _arrow(ImageDraw.Draw(canvas), start, end, (235, 40, 40, 255))
+            _arrow(ImageDraw.Draw(canvas), (sx, sy), end, (235, 40, 40, 255))
 
-    # Series branding: edge bar, logo and episode badge (bottom-left, away from the timestamp).
+    # Series branding: edge bar, then logo + episode tab as one unit in a free corner.
     if theme.edge_bar:
         bar = Image.new("RGBA", (14, H), _hex(theme.primary))
         canvas.alpha_composite(bar, (0 if left else W - 14, 0))
-    badge_x = 26
-    if logo_img is not None:
-        canvas.alpha_composite(logo_img, (14, H - logo_img.height - 6))
-        badge_x = 14 + logo_img.width - 40
-    if theme.badge and episode not in (None, ""):
-        label = theme.badge.replace("{n}", str(episode))
-        f = _font(font_path, 64)
-        box = f.getbbox(label, stroke_width=4)
-        bw, bh = box[2] - box[0] + 50, box[3] - box[1] + 30
-        badge = Image.new("RGBA", (bw + 16, bh + 16), (0, 0, 0, 0))
-        bd = ImageDraw.Draw(badge)
-        bd.rounded_rectangle([8, 8, bw + 8, bh + 8], radius=18, fill=_hex(theme.primary),
-                             outline=(255, 255, 255, 255), width=6)
-        bd.text((33 - box[0], 23 - box[1]), label, font=f, fill=(255, 255, 255, 255),
-                stroke_width=4, stroke_fill=_hex(theme.stroke))
-        badge = badge.rotate(theme.tilt, expand=True, resample=Image.BICUBIC)
-        canvas.alpha_composite(badge, (badge_x, H - badge.height - 22))
+    brand = _brand(theme, episode, font_path)
+    if brand is not None:
+        default = {"side": "bottom-left" if left else "top-left",
+                   "top": "bottom-left" if left else "bottom-right",
+                   "bottom": "top-left" if left else "top-right"}[layout]
+        canvas.alpha_composite(brand, _place(brand.size, concept.brand_corner or default, obstacles))
     return canvas.convert("RGB")
 
 
@@ -523,7 +630,9 @@ def make(cfg: dict, video: dict, screenshots: list[Path], out_dir: Path, *, titl
                     icons=[i for i in (c.get("icons") or []) if i in icons],
                     character=c.get("character") if c.get("character") in chars else None,
                     focus=c.get("focus") if isinstance(c.get("focus"), dict) else None,
-                    ring=bool(c.get("ring")), arrow=bool(c.get("arrow")), why=str(c.get("why", ""))))
+                    ring=bool(c.get("ring")), arrow=bool(c.get("arrow")),
+                    layout=c.get("layout") if c.get("layout") in LAYOUTS else "side",
+                    brand_corner=c.get("brand_corner") or "", why=str(c.get("why", ""))))
         except Exception as exc:  # thumbnails are a bonus; fall back to the plain layout
             log(f"AI thumbnail design skipped: {exc}")
 
@@ -542,6 +651,7 @@ def make(cfg: dict, video: dict, screenshots: list[Path], out_dir: Path, *, titl
             with Image.open(bgp) as im:
                 side = "right" if busier_side(im) == "left" else "left"
             concepts.append(Concept(text=texts[i % len(texts)], background=i % len(screenshots) + 1,
+                                    layout=list(LAYOUTS)[i % len(LAYOUTS)],
                                     text_side=side if i % 2 == 0 else ("left" if side == "right" else "right"),
                                     character=pose_names[i % len(pose_names)] if pose_names else None))
 
