@@ -16,7 +16,7 @@ if os.path.isdir(ffmpeg_dir):
     for exe in ("ffmpeg.exe", "ffprobe.exe"):
         binaries.append((os.path.join(ffmpeg_dir, exe), "ffmpeg"))
 
-for pkg in ("faster_whisper", "ctranslate2", "onnxruntime", "av", "tokenizers", "huggingface_hub"):
+for pkg in ("faster_whisper", "ctranslate2", "onnxruntime", "av", "tokenizers", "huggingface_hub", "hf_xet"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b

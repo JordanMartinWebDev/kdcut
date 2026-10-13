@@ -16,7 +16,7 @@ whisper = ["faster-whisper>=1.1"]
 cuda = ["nvidia-cublas-cu12", "nvidia-cudnn-cu12>=9,<10"]
 all = ["faster-whisper>=1.1", "nvidia-cublas-cu12", "nvidia-cudnn-cu12>=9,<10"]
 # The desktop app (what the Windows installer bundles).
-app = ["faster-whisper>=1.1", "PySide6-Essentials>=6.6"]
+app = ["faster-whisper>=1.1", "PySide6-Essentials>=6.6", "hf_xet"]
 
 [project.scripts]
 kdcut = "kdcut.cli:main"

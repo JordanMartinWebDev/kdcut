@@ -104,6 +104,22 @@ def _load_model(cfg: dict, log=print):
     raise RuntimeError(f"Could not load Whisper: {last_err}")
 
 
+def _load_wav(path: Path):
+    """16 kHz mono PCM WAV -> float32 samples.
+
+    We decode with ffmpeg ourselves, so faster-whisper's PyAV-based loader (which breaks
+    whenever PyAV changes its API) is never used.
+    """
+    import wave
+
+    import numpy as np
+    with wave.open(str(path), "rb") as w:
+        if w.getsampwidth() != 2 or w.getnchannels() != 1:
+            raise RuntimeError(f"Unexpected audio format in {path.name}")
+        pcm = w.readframes(w.getnframes())
+    return np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+
+
 def transcribe_file(path: Path, cfg: dict, cache_dir: Path, force: bool = False,
                     on_progress=None, log=print) -> list[Word]:
     info = media.probe(path)
@@ -122,7 +138,7 @@ def transcribe_file(path: Path, cfg: dict, cache_dir: Path, force: bool = False,
     model = _load_model(cfg, log)
     log(f"Transcribing {path.name} (audio track {track + 1})")
     segments, _ = model.transcribe(
-        str(wav),
+        _load_wav(wav),
         language=cfg["whisper"].get("language") or None,
         word_timestamps=True,
         vad_filter=True,
