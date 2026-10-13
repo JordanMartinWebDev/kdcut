@@ -43,6 +43,7 @@ class Metadata:
     thumbnail_text: list[str] = field(default_factory=list)
     thumbnail_moments: list[str] = field(default_factory=list)
     cold_open: dict | None = None
+    music: list[dict] = field(default_factory=list)
 
 
 def youtube_chapters(chapters: list[tuple[float, str]], total: float) -> list[tuple[float, str]]:
@@ -66,7 +67,8 @@ COLD_OPEN_RULES = (
 
 
 def generate(cfg: dict, video: dict, kept: list[Block], caller=llm.call_tool,
-             cold_open: bool = False, notes: dict[str, list[str]] | None = None) -> Metadata:
+             cold_open: bool = False, notes: dict[str, list[str]] | None = None,
+             music_library: str = "") -> Metadata:
     lines = []
     for b in kept:
         lines.append(f"{b.id}{' [HIGHLIGHT]' if 'highlight' in b.flags else ''} {b.text}")
@@ -85,8 +87,13 @@ def generate(cfg: dict, video: dict, kept: list[Block], caller=llm.call_tool,
         user += f"Series: {video['series']} {video.get('episode', '')}\n"
     if cold_open:
         user += COLD_OPEN_RULES + "\n"
+    schema = SCHEMA
+    if music_library:
+        from kdcut import music
+        user += music.RULES + "\nMusic library:\n" + music_library + "\n"
+        schema = {**SCHEMA, "properties": {**SCHEMA["properties"], "music": music.SCHEMA_PART}}
     user += "Final edit transcript:\n" + "\n".join(lines)
-    res = caller(cfg, system, user, "submit_metadata", "Submit the YouTube packaging.", SCHEMA)
+    res = caller(cfg, system, user, "submit_metadata", "Submit the YouTube packaging.", schema)
     md = Metadata(**{k: res.get(k, v) for k, v in Metadata().__dict__.items()})
     if not cold_open:
         md.cold_open = None

@@ -18,7 +18,7 @@ import tomllib
 from pathlib import Path
 
 from kdcut import blocks as blocks_mod
-from kdcut import fcpxml, media, metadata, planner, transcribe, vision
+from kdcut import fcpxml, media, metadata, music, planner, transcribe, vision
 from kdcut.assets import AssetIndex
 from kdcut.blocks import fmt_ts
 from kdcut.planner import Plan
@@ -171,19 +171,28 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     durations = [i.duration for i in infos]
     kept_ids = [bid for rng in kept_ranges(blocks, plan, durations, ed) for bid in rng.block_ids]
     want_cold_open = bool(video.get("cold_open", ed.get("cold_open", True)))
+    mcfg = cfg.get("music", {})
+    library: list[music.Track] = []
+    if mcfg.get("enabled", True) and mcfg.get("folders") and video.get("music", True):
+        library = music.scan(mcfg["folders"], log=r.log)
+        r.log(f"Music library: {len(library)} track(s)")
+    history = music.load_history()
+    library_text = music.library_text(library, history) if library else ""
     md_file = out / "metadata.json"
     md = metadata.Metadata()
     if use_ai:
         cached = json.loads(md_file.read_text(encoding="utf-8")) if md_file.is_file() else {}
         if (cached and cached.pop("_cold_open_requested", None) == want_cold_open
+                and cached.pop("_music_requested", False) == bool(library)
                 and md_file.stat().st_mtime >= plan_file.stat().st_mtime):
             md = metadata.Metadata(**cached)
         else:
             r.log("Writing titles and description" + (", picking a cold open" if want_cold_open else ""))
             try:
                 md = metadata.generate(cfg, video, [by_id[i] for i in kept_ids], caller=call,
-                                       cold_open=want_cold_open, notes=notes)
-                md_file.write_text(json.dumps({**md.__dict__, "_cold_open_requested": want_cold_open},
+                                       cold_open=want_cold_open, notes=notes, music_library=library_text)
+                md_file.write_text(json.dumps({**md.__dict__, "_cold_open_requested": want_cold_open,
+                                               "_music_requested": bool(library)},
                                               indent=2, ensure_ascii=False), encoding="utf-8")
             except Exception as exc:  # packaging is a bonus; never lose the timeline over it
                 r.log(f"titles/description skipped: {exc}")
@@ -209,7 +218,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     tcfg = cfg["timeline"]
     cache = Path(cfg["assets"]["cache_dir"]).expanduser() / "converted"
     review: list[str] = []
-    placed = {"broll": 0, "overlay": 0, "sfx": 0}
+    placed = {"broll": 0, "overlay": 0, "sfx": 0, "music": 0}
     teaser = tl.main[0] if tl.main and tl.main[0].role == "cold_open" else None
     if teaser:
         cb = by_id[md.cold_open["id"]]
@@ -302,6 +311,46 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     for b in blocks:
         if "highlight" in b.flags and b.id in starts:
             tl.markers.append(Marker(rec=starts[b.id], name="Highlight (you said 'clip that')", kind="note"))
+
+    # Background music on its own track (A3), after the teaser.
+    if library:
+        music_start = tl.seconds(teaser.rec_end) if teaser else 0.0
+        total = tl.seconds(tl.duration)
+        by_name = {t.name.lower(): t for t in library}
+
+        def find(name: str):
+            n = (name or "").strip().lower()
+            if not n:
+                return None
+            return by_name.get(n) or next((t for t in library if n in t.name.lower() or t.title.lower() in n), None)
+
+        raw = []
+        for c in md.music:
+            rec = anchor(c.get("at", ""))
+            if rec is None:
+                continue
+            tracks = [t for t in (find(c.get("track", "")), find(c.get("backup", ""))) if t]
+            raw.append((max(tl.seconds(rec), music_start), tracks, c.get("why", "")))
+        if not raw:   # no AI picks: one fresh track per chapter
+            starts = sorted({max(t, music_start) for t, _ in chapter_times} | {music_start})
+            rng_tracks = sorted(library, key=lambda t: history.get(t.path, 0))
+            raw = [(s, [rng_tracks[i % len(rng_tracks)]], "") for i, s in enumerate(starts)]
+        raw.sort(key=lambda x: x[0])
+        cues = [music.Cue(s, raw[i + 1][0] if i + 1 < len(raw) else total, tr, why)
+                for i, (s, tr, why) in enumerate(raw)]
+        pieces = music.fill(cues, library, history, seed=len(blocks))
+        vol = float(mcfg.get("volume_db", -20))
+        for pc in pieces:
+            rec = tl.frames(pc.start)
+            dur = min(tl.frames(pc.length), tl.duration - rec)
+            if dur <= tl.frames(2):
+                continue
+            tl.connected.append(Clip(path=Path(pc.track.path), src_in=tl.frames(pc.offset), dur=dur, rec=rec,
+                                     lane=lanes.place(-3, rec, dur), enable="audio", role="music",
+                                     name=pc.track.name, volume_db=vol))
+            review.append(f"{fmt_ts(pc.start)}  Music  {pc.track.name}")
+        placed["music"] = len(pieces)
+        music.record_use([pc.track.path for pc in pieces])
 
     stem = _safe(name)
     xml_path = fcpxml.write(tl, out / f"{stem}.fcpxml", event=cfg["channel"].get("name") or "kdcut")

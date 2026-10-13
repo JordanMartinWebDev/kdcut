@@ -119,6 +119,32 @@ class AssetTests(unittest.TestCase):
             self.assertEqual(picks, {"break1.wav", "break2.wav"})
 
 
+class MusicTests(unittest.TestCase):
+    def test_epidemic_names(self):
+        from kdcut.music import parse_name
+        self.assertEqual(parse_name("ES_Flying Over Hills - Hallman"), ("Flying Over Hills", "Hallman"))
+        self.assertEqual(parse_name("my_song"), ("my song", ""))
+
+    def test_fill_continues_with_other_tracks_and_respects_silence(self):
+        from kdcut.music import Cue, Track, fill
+        a = Track("a", "Calm A", "x", ["Calm"], 60)
+        b = Track("b", "Calm B", "x", ["Calm"], 60)
+        c = Track("c", "Tense C", "x", ["Tense"], 60)
+        cues = [Cue(0, 150, [a]), Cue(150, 200, []), Cue(200, 260, [c])]
+        out = fill(cues, [a, b, c], {})
+        self.assertEqual(out[0].track.path, "a")
+        self.assertNotEqual(out[1].track.path, "a")           # no back-to-back repeat
+        self.assertAlmostEqual(sum(p.length for p in out if p.start < 150), 150)
+        self.assertFalse(any(150 <= p.start < 200 for p in out))  # silence kept
+        self.assertEqual(out[-1].track.path, "c")
+
+    def test_single_track_library_loops_instead_of_hanging(self):
+        from kdcut.music import Cue, Track, fill
+        a = Track("a", "Only", "", [], 30)
+        out = fill([Cue(0, 95, [a])], [a], {})
+        self.assertEqual(len(out), 3)
+
+
 class ChapterTests(unittest.TestCase):
     def test_youtube_rules(self):
         ch = youtube_chapters([(3, "Intro"), (5, "Too close"), (60, "Mining"), (300, "Nether")], 600)

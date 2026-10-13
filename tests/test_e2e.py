@@ -76,6 +76,8 @@ class FakeAI:
             "thumbnail_text": ["DIAMONDS!"],
             "thumbnail_moments": ["B0006"],
             "cold_open": {"id": "B0006", "seconds": 4, "reason": "diamonds reaction"},
+            "music": [{"at": "B0002", "track": "Calm Fields - Sleepy Fish", "why": "building"},
+                      {"at": "B0008", "track": "", "why": "silence for the ending"}],
         }
 
 
@@ -138,6 +140,14 @@ class EndToEnd(unittest.TestCase):
         chars.mkdir()
         from PIL import Image
         Image.new("RGBA", (300, 600), (240, 200, 40, 255)).save(chars / "shocked.png")
+        mdir = cls.tmp / "music" / "Calm"
+        mdir.mkdir(parents=True)
+        ff("-f", "lavfi", "-i", "sine=frequency=330:duration=25", str(mdir / "ES_Calm Fields - Sleepy Fish.mp3"))
+        ff("-f", "lavfi", "-i", "sine=frequency=550:duration=30", str(mdir / "ES_Lazy Sunday - Ava Low.mp3"))
+        ff("-f", "lavfi", "-i", "sine=frequency=990:duration=2", str(mdir / "ES_Sting.mp3"))   # too short
+        import kdcut.music as music_mod
+        music_mod.HISTORY_FILE = home / "music_history.json"
+        cls.cfg = config._merge(cls.cfg, {"music": {"folders": [str(cls.tmp / "music")], "volume_db": -20}})
         cls.cfg = config._merge(cls.cfg, {"vision": {"enabled": True, "min_gap": 8},
                                           "thumbnails": {"characters_dir": str(chars),
                                                          "themes_dir": str(home / "themes")}})
@@ -183,7 +193,7 @@ class EndToEnd(unittest.TestCase):
 
     def test_edit_is_shorter(self):
         self.assertLess(self.result["final_seconds"], self.result["raw_seconds"] * 0.6)
-        self.assertEqual(self.result["placed"], {"broll": 1, "overlay": 1, "sfx": 1})
+        self.assertEqual(self.result["placed"], {"broll": 1, "overlay": 1, "sfx": 1, "music": 1})
 
     def test_fcpxml_is_valid_and_frame_accurate(self):
         root = ET.fromstring(self.xml.split("<!DOCTYPE fcpxml>", 1)[1])
@@ -209,7 +219,7 @@ class EndToEnd(unittest.TestCase):
                     start = secs(c.get("start"))
                     self.assertGreaterEqual(secs(child.get("offset")), start)
                     self.assertLess(secs(child.get("offset")), start + dur)
-                    self.assertIn(child.get("lane"), {"1", "2", "-1"})
+                    self.assertIn(child.get("lane"), {"1", "2", "-1", "-3"})
         # Converted overlay is a ProRes MOV, not the original WebM.
         srcs = [m.get("src") for m in root.iter("media-rep")]
         self.assertTrue(any(s.endswith(".mov") for s in srcs))
@@ -276,6 +286,18 @@ class EndToEnd(unittest.TestCase):
         prompt = next(c[1] for c in self.ai.calls if c[0] == "design_thumbnails")
         self.assertTrue(any(b.get("type") == "image" for b in prompt))
         self.assertIn("No style exists yet", prompt[0]["text"])
+
+    def test_music_on_its_own_track(self):
+        root = ET.fromstring(self.xml.split("<!DOCTYPE fcpxml>", 1)[1])
+        music = [e for e in root.iter("asset-clip") if e.get("name", "").startswith("Calm Fields")]
+        self.assertTrue(music)
+        self.assertEqual(music[0].get("lane"), "-3")
+        self.assertEqual(music[0].find("adjust-volume").get("amount"), "-20dB")
+        self.assertIn("Music  Calm Fields - Sleepy Fish", self.review)
+        prompt = next(c[1] for c in self.ai.calls if c[0] == "submit_metadata")
+        self.assertIn("Lazy Sunday - Ava Low [Calm]", prompt)
+        self.assertNotIn("Sting", prompt)
+        self.assertGreaterEqual(self.result["placed"]["music"], 1)
 
     def test_rerun_reuses_plan_without_ai(self):
         ai = FakeAI()

@@ -56,6 +56,18 @@ your logo and character) and saves it, so every later episode looks consistent. 
 corner is kept clear because YouTube puts the video length there. Click **New thumbnail ideas**
 for another round; earlier ones are never overwritten.
 
+## Music
+
+Add background music in **Settings → Music**: pick one or more folders of music you're licensed
+to use, for example your **Epidemic Sound** downloads. Remember to connect your YouTube channel in
+your Epidemic account so the music isn't claimed. KDcut never downloads music itself.
+
+The AI matches music to each part of the video: calm for building, tense for caves and fights,
+upbeat for the intro. It leaves silence where that's stronger, and avoids tracks you used in the
+last week. Music goes on its own audio track at background volume (Quiet, Normal or Louder), after
+the cold open. Mood subfolders (`Calm`, `Tense`, `Upbeat`, `Funny`) help the AI choose; Epidemic's
+`ES_Track Name - Artist` filenames are read automatically.
+
 ## Letting the AI look at the footage
 
 With **Let the AI look at the footage** ticked, KDcut finds stretches where you weren't talking,
@@ -236,6 +248,8 @@ whole pipeline, including that every cut in the FCPXML lands on a whole frame.
 - [x] B-roll placement, chapters, titles, description, thumbnail frames
 - [x] Thumbnails with a consistent style per series (character, icons, logo, episode badge)
 - [x] Optional footage check (the AI looks at frames from quiet stretches)
+- [x] Background music from your own licensed library, picked per section
+- [ ] Music ducking under your voice
 - [ ] Upload to YouTube as private with the metadata filled in
 - [x] Desktop app with drag and drop, and a Windows installer built by GitHub Actions
 - [ ] Auto speed-ramp long wordless stretches into timelapses

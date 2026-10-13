@@ -14,7 +14,7 @@ from PySide6.QtGui import QDesktopServices, QFont, QGuiApplication, QIcon, QKeyS
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
     QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QStackedWidget,
+    QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QStackedWidget,
     QVBoxLayout, QWidget,
 )
 
@@ -285,7 +285,8 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None, welcome: bool = False):
         super().__init__(parent)
         self.setWindowTitle(f"{APP_NAME} settings")
-        self.setMinimumWidth(640)
+        self.setMinimumWidth(680)
+        self.resize(720, 760)
         self.settings = config.load_settings()
         cfg = config.load()
         self.bridge = Bridge()
@@ -388,6 +389,37 @@ class SettingsDialog(QDialog):
         self.notes.setFixedHeight(80)
         form.addRow("Your editing style", self.notes)
 
+        # Music
+        self.music_on = QCheckBox("Add background music")
+        self.music_on.setChecked(bool(cfg["music"].get("enabled", True)))
+        self.music_dirs = QListWidget()
+        self.music_dirs.setMinimumHeight(60)
+        for d in cfg["music"].get("folders", []):
+            self.music_dirs.addItem(d)
+        madd = QPushButton("Add folder…")
+        mrem = QPushButton("Remove")
+        madd.clicked.connect(self.add_music_dir)
+        mrem.clicked.connect(lambda: [self.music_dirs.takeItem(self.music_dirs.row(i))
+                                      for i in self.music_dirs.selectedItems()])
+        self.music_vol = QComboBox()
+        for text, db in [("Quiet", -24), ("Normal", -20), ("Louder", -16)]:
+            self.music_vol.addItem(text, db)
+        self.music_vol.setCurrentIndex(max(self.music_vol.findData(int(cfg["music"].get("volume_db", -20))), 0))
+        mrow = QHBoxLayout()
+        mrow.addWidget(madd)
+        mrow.addWidget(mrem)
+        mrow.addStretch(1)
+        mrow.addWidget(label("Volume", "hint", wrap=False))
+        mrow.addWidget(self.music_vol)
+        mbox2 = QVBoxLayout()
+        mbox2.addWidget(self.music_on)
+        mbox2.addWidget(self.music_dirs)
+        mbox2.addLayout(mrow)
+        mbox2.addWidget(label("Only music you're licensed to use, e.g. your Epidemic Sound downloads "
+                              "(connect your YouTube channel in Epidemic). Mood subfolders like Calm, "
+                              "Tense or Upbeat help the AI choose.", "hint"))
+        form.addRow("Music", mbox2)
+
         # Characters for thumbnails
         self.chars = QLineEdit(cfg["thumbnails"].get("characters_dir", ""))
         self.chars.setPlaceholderText("Folder with transparent PNG poses of your skin")
@@ -412,7 +444,13 @@ class SettingsDialog(QDialog):
         prj.addWidget(browse)
         form.addRow("Save videos in", prj)
 
-        root.addLayout(form)
+        inner = QWidget()
+        inner.setLayout(form)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(inner)
+        root.addWidget(scroll, 1)
         self.log = label("", "hint")
         root.addWidget(self.log)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
@@ -439,6 +477,12 @@ class SettingsDialog(QDialog):
         d = QFileDialog.getExistingDirectory(self, "Choose an editing pack folder")
         if d and d not in self.pack_list():
             self.packs.addItem(str(Path(d)))
+
+    def add_music_dir(self):
+        d = QFileDialog.getExistingDirectory(self, "Choose a music folder")
+        existing = [self.music_dirs.item(i).text() for i in range(self.music_dirs.count())]
+        if d and str(Path(d)) not in existing:
+            self.music_dirs.addItem(str(Path(d)))
 
     def _pick_dir(self, field: QLineEdit, title: str):
         d = QFileDialog.getExistingDirectory(self, title, field.text())
@@ -514,6 +558,10 @@ class SettingsDialog(QDialog):
         s.setdefault("channel", {})["style_notes"] = self.notes.toPlainText().strip()
         s.setdefault("app", {})["projects_dir"] = self.projects.text().strip()
         s.setdefault("thumbnails", {})["characters_dir"] = self.chars.text().strip()
+        m = s.setdefault("music", {})
+        m["enabled"] = self.music_on.isChecked()
+        m["folders"] = [self.music_dirs.item(i).text() for i in range(self.music_dirs.count())]
+        m["volume_db"] = self.music_vol.currentData()
         return s
 
     def save(self):

@@ -48,6 +48,11 @@ DEFAULTS: dict[str, Any] = {
         "min_gap": 8,              # seconds without talking before it takes a look
         "max_frames": 120,         # cost cap per video
     },
+    "music": {
+        "enabled": True,
+        "folders": [],             # your licensed music (e.g. Epidemic Sound downloads)
+        "volume_db": -20,          # background level; voice stays on top
+    },
     "thumbnails": {
         "enabled": True,
         "characters_dir": "",      # folder of transparent PNG poses of your skin

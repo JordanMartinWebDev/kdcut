@@ -138,8 +138,8 @@ def summary_text(result: dict) -> str:
     raw, final = result["raw_seconds"], result["final_seconds"]
     pct = f" ({100 * final / raw:.0f}% kept)" if raw else ""
     return (f"{fmt_ts(raw)} of footage became a {fmt_ts(final)} video{pct}.\n"
-            f"Added {p['broll']} B-roll clip(s), {p['overlay']} overlay(s) and "
-            f"{p['sfx']} sound effect(s).")
+            f"Added {p['broll']} B-roll clip(s), {p['overlay']} overlay(s), "
+            f"{p['sfx']} sound effect(s) and {p.get('music', 0)} music track(s).")
 
 
 RESOLVE_STEPS = (
@@ -147,7 +147,7 @@ RESOLVE_STEPS = (
     "2. File > Import > Timeline...\n"
     "3. Pick the .fcpxml file in this video's folder.\n"
     "4. If Resolve asks about settings, keep the timeline's settings.\n\n"
-    "B-roll is on track V2, overlays on V3, sound effects on A2. Chapter markers are on the "
+    "B-roll is on track V2, overlays on V3, sound effects on A2, music on A4. Chapter markers are on the "
     "timeline. If there's a cold open, it's the first clip; delete it if you don't like it. "
     "Check review.md for what was cut."
 )

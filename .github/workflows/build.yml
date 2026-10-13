@@ -86,7 +86,7 @@ jobs:
         shell: pwsh
         run: |
           choco install innosetup -y --no-progress
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=0.3.${{ github.run_number }} packaging\installer.iss
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=0.4.${{ github.run_number }} packaging\installer.iss
           Get-Item dist\KDcut-Setup.exe | Select-Object Name, Length
 
       - uses: actions/upload-artifact@v4
@@ -101,6 +101,6 @@ jobs:
         run: |
           gh release delete app-latest --cleanup-tag -y || true
           gh release create app-latest dist/KDcut-Setup.exe \
-            --title "KDcut 0.3.${{ github.run_number }}" \
+            --title "KDcut 0.4.${{ github.run_number }}" \
             --notes "Download **KDcut-Setup.exe** below and run it. Built from ${{ github.sha }}." \
             --target ${{ github.sha }} --latest

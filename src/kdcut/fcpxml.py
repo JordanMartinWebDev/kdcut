@@ -99,7 +99,10 @@ class _Writer:
             attrs["tcFormat"] = "NDF"
             if clip.enable != "all":
                 attrs["srcEnable"] = clip.enable
-        return ET.SubElement(parent, tag, attrs)
+        el = ET.SubElement(parent, tag, attrs)
+        if clip.volume_db is not None and tag == "asset-clip":
+            ET.SubElement(el, "adjust-volume", {"amount": f"{clip.volume_db:g}dB"})
+        return el
 
 
 def write(tl: Timeline, dest: Path, event: str = "KDPlays") -> Path:

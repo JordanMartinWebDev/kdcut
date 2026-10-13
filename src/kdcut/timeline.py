@@ -29,6 +29,7 @@ class Clip:
     role: str = "main"   # main | broll | overlay | sfx
     name: str = ""
     is_image: bool = False
+    volume_db: float | None = None   # clip gain (background music)
 
     @property
     def rec_end(self) -> int:
