@@ -63,7 +63,22 @@ jobs:
         shell: pwsh
         run: |
           $p = Start-Process -FilePath "dist\KDcut\KDcut.exe" -ArgumentList "--selftest","$pwd\selftest.json","--whisper" -Wait -PassThru
-          Get-Content selftest.json
+          function Note($level, $title, $text) {
+            $msg = ($text -replace '%','%25' -replace "`r",'' -replace "`n",'%0A')
+            if ($msg.Length -gt 3500) { $msg = $msg.Substring($msg.Length - 3500) }
+            Write-Output "::${level} title=${title}::${msg}"
+          }
+          if (Test-Path selftest.json) {
+            $r = Get-Content selftest.json -Raw | ConvertFrom-Json
+            foreach ($k in $r.PSObject.Properties) {
+              $level = if ($k.Value.StartsWith("ok")) { "notice" } else { "error" }
+              Note $level "selftest: $($k.Name)" $k.Value
+            }
+          } else {
+            Note "error" "selftest" "No selftest.json written (exit code $($p.ExitCode))"
+          }
+          $log = Join-Path $HOME ".kdcut\kdcut.log"
+          if (Test-Path $log) { Note "warning" "kdcut.log" (Get-Content $log -Raw) }
           if ($p.ExitCode -ne 0) { throw "Self-test failed" }
 
       - name: Build installer
