@@ -739,11 +739,12 @@ class UploadDialog(QDialog):
                         key=lambda p: p.stat().st_mtime, reverse=True)
         for p in thumbs:
             self.thumb.addItem(p.name, str(p))
-        self.thumb.addItem("Choose another image…", "__pick__")
         self.thumb.addItem("No custom thumbnail", "")
+        self.thumb.addItem("Choose another image…", "__pick__")
         self.thumb_preview = QLabel()
         self.thumb_preview.setFixedSize(224, 126)
-        self.thumb.currentIndexChanged.connect(self.thumb_changed)
+        self.thumb.currentIndexChanged.connect(lambda *_: self.thumb_changed(pick=False))
+        self.thumb.activated.connect(lambda *_: self.thumb_changed(pick=True))
         tbox = QHBoxLayout()
         tbox.addWidget(self.thumb, 1)
         tbox.addWidget(self.thumb_preview)
@@ -790,7 +791,7 @@ class UploadDialog(QDialog):
         self.bridge.done.connect(self.done_upload)
         self.bridge.failed.connect(self.failed_upload)
         self.bridge.cancelled.connect(lambda: self.failed_upload("Upload cancelled."))
-        self.thumb_changed()
+        self.thumb_changed(pick=False)
 
     def pick_export(self):
         f, _ = QFileDialog.getOpenFileName(self, "Exported video", str(self.out_dir),
@@ -798,9 +799,11 @@ class UploadDialog(QDialog):
         if f:
             self.export.setText(f)
 
-    def thumb_changed(self, *_):
+    def thumb_changed(self, pick: bool = False):
         data = self.thumb.currentData()
         if data == "__pick__":
+            if not pick:      # only open the file picker when the user chose this item
+                return
             f, _ = QFileDialog.getOpenFileName(self, "Thumbnail", str(self.out_dir), "Images (*.jpg *.jpeg *.png)")
             if f:
                 self.thumb.insertItem(0, Path(f).name, f)
