@@ -411,8 +411,15 @@ class SettingsDialog(QDialog):
         mrow.addStretch(1)
         mrow.addWidget(label("Volume", "hint", wrap=False))
         mrow.addWidget(self.music_vol)
+        self.music_duck = QCheckBox("Lower the music while I talk")
+        self.music_duck.setChecked(bool(cfg["music"].get("duck", True)))
         mbox2 = QVBoxLayout()
-        mbox2.addWidget(self.music_on)
+        mon = QHBoxLayout()
+        mon.addWidget(self.music_on)
+        mon.addSpacing(16)
+        mon.addWidget(self.music_duck)
+        mon.addStretch(1)
+        mbox2.addLayout(mon)
         mbox2.addWidget(self.music_dirs)
         mbox2.addLayout(mrow)
         mbox2.addWidget(label("Only music you're licensed to use, e.g. your Epidemic Sound downloads "
@@ -576,6 +583,7 @@ class SettingsDialog(QDialog):
         m["enabled"] = self.music_on.isChecked()
         m["folders"] = [self.music_dirs.item(i).text() for i in range(self.music_dirs.count())]
         m["volume_db"] = self.music_vol.currentData()
+        m["duck"] = self.music_duck.isChecked()
         return s
 
     def save(self):

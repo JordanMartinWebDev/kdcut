@@ -52,6 +52,7 @@ DEFAULTS: dict[str, Any] = {
         "enabled": True,
         "folders": [],             # your licensed music (e.g. Epidemic Sound downloads)
         "volume_db": -20,          # background level; voice stays on top
+        "duck": True,              # dip the music while you talk
     },
     "thumbnails": {
         "enabled": True,

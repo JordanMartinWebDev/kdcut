@@ -18,7 +18,7 @@ import tomllib
 from pathlib import Path
 
 from kdcut import blocks as blocks_mod
-from kdcut import fcpxml, media, metadata, music, planner, transcribe, vision
+from kdcut import captions, ducking, fcpxml, media, metadata, music, planner, transcribe, vision
 from kdcut.assets import AssetIndex
 from kdcut.blocks import fmt_ts
 from kdcut.planner import Plan
@@ -303,11 +303,14 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         review.append("  (no editing packs indexed yet, so SFX and overlays were skipped)")
 
     chapter_times: list[tuple[float, str]] = []
+    chapter_anchors: dict[str, str] = {}      # title -> words it starts with (to re-time later)
     for c in plan.chapters:
         rec = anchor(c["at"])
         if rec is not None:
             tl.markers.append(Marker(rec=rec, name=c["title"], kind="chapter"))
             chapter_times.append((tl.seconds(rec), c["title"]))
+            k = nearest_kept(c["at"], blocks, starts)
+            chapter_anchors[c["title"]] = by_id[k].text if k else ""
     for b in blocks:
         if "highlight" in b.flags and b.id in starts:
             tl.markers.append(Marker(rec=starts[b.id], name="Highlight (you said 'clip that')", kind="note"))
@@ -332,28 +335,47 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             tracks = [t for t in (find(c.get("track", "")), find(c.get("backup", ""))) if t]
             raw.append((max(tl.seconds(rec), music_start), tracks, c.get("why", "")))
         if not raw:   # no AI picks: one fresh track per chapter
-            starts = sorted({max(t, music_start) for t, _ in chapter_times} | {music_start})
+            cue_starts = sorted({max(t, music_start) for t, _ in chapter_times} | {music_start})
             rng_tracks = sorted(library, key=lambda t: history.get(t.path, 0))
-            raw = [(s, [rng_tracks[i % len(rng_tracks)]], "") for i, s in enumerate(starts)]
+            raw = [(s, [rng_tracks[i % len(rng_tracks)]], "") for i, s in enumerate(cue_starts)]
         raw.sort(key=lambda x: x[0])
         cues = [music.Cue(s, raw[i + 1][0] if i + 1 < len(raw) else total, tr, why)
                 for i, (s, tr, why) in enumerate(raw)]
-        pieces = music.fill(cues, library, history, seed=len(blocks))
+        pieces = [pc for pc in music.fill(cues, library, history, seed=len(blocks)) if pc.length >= 2]
         vol = float(mcfg.get("volume_db", -20))
         for pc in pieces:
-            rec = tl.frames(pc.start)
-            dur = min(tl.frames(pc.length), tl.duration - rec)
-            if dur <= tl.frames(2):
-                continue
-            tl.connected.append(Clip(path=Path(pc.track.path), src_in=tl.frames(pc.offset), dur=dur, rec=rec,
-                                     lane=lanes.place(-3, rec, dur), enable="audio", role="music",
-                                     name=pc.track.name, volume_db=vol))
             review.append(f"{fmt_ts(pc.start)}  Music  {pc.track.name}")
+        bed = None
+        if pieces and mcfg.get("duck", True):
+            # One pre-mixed music bed that dips under your voice.
+            speech = [(tl.seconds(starts[b]), tl.seconds(ends[b])) for b in starts]
+            gains = ducking.envelope(speech, total, talk_db=vol - 4, gap_db=vol + 6)
+            try:
+                r.log("Mixing the music so it dips while you talk")
+                bed = ducking.render_bed(pieces, total, gains, out / "music_bed.m4a", start=music_start)
+            except Exception as exc:
+                r.log(f"Music ducking skipped ({exc}); placing tracks at a steady level")
+        if bed is not None:
+            rec = tl.frames(music_start)
+            dur = tl.duration - rec
+            tl.connected.append(Clip(path=bed, src_in=0, dur=dur, rec=rec, lane=lanes.place(-3, rec, dur),
+                                     enable="audio", role="music", name="Music (dips under voice)"))
+        else:
+            for pc in pieces:
+                rec = tl.frames(pc.start)
+                dur = min(tl.frames(pc.length), tl.duration - rec)
+                if dur <= tl.frames(2):
+                    continue
+                tl.connected.append(Clip(path=Path(pc.track.path), src_in=tl.frames(pc.offset), dur=dur,
+                                         rec=rec, lane=lanes.place(-3, rec, dur), enable="audio",
+                                         role="music", name=pc.track.name, volume_db=vol))
         placed["music"] = len(pieces)
         music.record_use([pc.track.path for pc in pieces])
 
     stem = _safe(name)
     xml_path = fcpxml.write(tl, out / f"{stem}.fcpxml", event=cfg["channel"].get("name") or "kdcut")
+    (out / "captions.srt").write_text(
+        captions.to_srt(captions.words_on_timeline(words, recordings, tl)), encoding="utf-8")
 
     # 5. Review notes + upload kit ----------------------------------------------------
     r.step(4, "Writing notes")
@@ -405,6 +427,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     (out / "upload_kit.json").write_text(json.dumps({
         "titles": md.titles, "description": md.description, "chapters": chapters_text,
         "tags": md.tags, "thumbnail_text": md.thumbnail_text,
+        "chapter_anchors": [[title, chapter_anchors.get(title, ""), t] for t, title in yt_chapters],
     }, indent=2, ensure_ascii=False), encoding="utf-8")
 
     r.log(f"Done. Raw {fmt_ts(raw_total)} -> edit {fmt_ts(final)}")

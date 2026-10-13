@@ -289,10 +289,12 @@ class EndToEnd(unittest.TestCase):
 
     def test_music_on_its_own_track(self):
         root = ET.fromstring(self.xml.split("<!DOCTYPE fcpxml>", 1)[1])
-        music = [e for e in root.iter("asset-clip") if e.get("name", "").startswith("Calm Fields")]
-        self.assertTrue(music)
+        music = [e for e in root.iter("asset-clip") if e.get("name", "").startswith("Music (dips")]
+        self.assertEqual(len(music), 1)
         self.assertEqual(music[0].get("lane"), "-3")
-        self.assertEqual(music[0].find("adjust-volume").get("amount"), "-20dB")
+        bed = self.proj / "output" / "music_bed.m4a"
+        self.assertTrue(bed.exists())
+        self.assertGreater(media.probe(bed).duration, 5)
         self.assertIn("Music  Calm Fields - Sleepy Fish", self.review)
         prompt = next(c[1] for c in self.ai.calls if c[0] == "submit_metadata")
         self.assertIn("Lazy Sunday - Ava Low [Calm]", prompt)
