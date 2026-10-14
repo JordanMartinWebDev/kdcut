@@ -136,9 +136,7 @@ def run_watched(cmd: list[str], total: float, *, label: str = "ffmpeg", log=None
         if now - last_report >= 15:
             last_report = now
             msg = f"{label}: {_clock(state['t'])} of {_clock(total)} ({state['speed'] or '?'})"
-            debug(msg)
-            if log:
-                log(msg)
+            (log or debug)(msg)       # the build's log already writes to kdcut.log
         if now - state["changed"] > stall:
             killed = f"stopped making progress at {_clock(state['t'])} of {_clock(total)}"
         elif timeout and now - started > timeout:

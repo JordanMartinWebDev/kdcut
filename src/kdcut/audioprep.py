@@ -139,7 +139,7 @@ def split_tracks(rec: Path, info: media.MediaInfo, mic: int, dest_dir: Path, log
     for stream, kind, label, target in plan:
         base = f"{rec.stem}.a{stream + 1}.{kind}"
         meta = dest_dir / f"{base}.json"
-        sig = {"size": st.st_size, "mtime": int(st.st_mtime), "stream": stream, "target": target, "v": 1}
+        sig = {"size": st.st_size, "mtime": int(st.st_mtime), "stream": stream, "target": target, "v": 2}
         try:
             old = json.loads(meta.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -159,7 +159,10 @@ def split_tracks(rec: Path, info: media.MediaInfo, mic: int, dest_dir: Path, log
             af += ",alimiter=limit=0.89:level=disabled"      # catch shouts after the boost
         src = ["ffmpeg", "-y", "-v", "error", "-i", str(rec), "-map", f"0:a:{stream}", "-vn"]
         attempts = [
-            (dest_dir / f"{base}.m4a", ["-af", af, "-ar", "48000", "-c:a", "aac", "-b:a", "256k"]),
+            # async: OBS tracks can have gaps (e.g. the game paused); fill them with silence so
+            # everything after stays in sync, and so the encoder doesn't choke on the jump.
+            (dest_dir / f"{base}.m4a", ["-af", f"aresample=48000:async=1:first_pts=0,{af}",
+                                        "-c:a", "aac", "-b:a", "256k"]),
             # Plan B: plain WAV, re-timed so gaps or glitches in the track can't stall the encoder.
             (dest_dir / f"{base}.wav", ["-af", f"aresample=48000:async=1:first_pts=0,{af}",
                                         "-c:a", "pcm_s16le", "-rf64", "auto"]),
