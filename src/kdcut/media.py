@@ -143,15 +143,20 @@ def list_media(folder: Path, exts: set[str]) -> list[Path]:
     return sorted(files, key=_natural_key)
 
 
-def pick_mic_track(info: MediaInfo, setting) -> int:
-    """Return the 0-based audio stream to transcribe."""
+def pick_mic_track(info: MediaInfo, setting, log=None) -> int:
+    """Return the 0-based audio stream to transcribe. A track number that this recording
+    doesn't have (e.g. 'track 2' on a one-track MP4) falls back instead of failing."""
     if not info.audio:
         raise MediaError(f"{info.path.name} has no audio track to transcribe.")
     if isinstance(setting, int) or (isinstance(setting, str) and setting.isdigit()):
         idx = int(setting) - 1
         if 0 <= idx < len(info.audio):
             return idx
-        raise MediaError(f"mic_track={setting} but {info.path.name} has {len(info.audio)} audio tracks.")
+        if log:
+            n = len(info.audio)
+            log(f"Settings say your mic is on audio track {setting}, but {info.path.name} only has "
+                f"{n} track{'s' if n != 1 else ''}. Using "
+                + ("that one (voice and game together)." if n == 1 else "the best guess instead."))
     for a in info.audio:
         if "mic" in a.title.lower():
             return a.index

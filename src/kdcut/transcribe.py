@@ -123,7 +123,7 @@ def _load_wav(path: Path):
 def transcribe_file(path: Path, cfg: dict, cache_dir: Path, force: bool = False,
                     on_progress=None, log=print) -> list[Word]:
     info = media.probe(path)
-    track = media.pick_mic_track(info, cfg["whisper"].get("mic_track", "auto"))
+    track = media.pick_mic_track(info, cfg["whisper"].get("mic_track", "auto"), log=log)
     key = _cache_key(path, track, cfg["whisper"].get("model", ""))
     cache_file = cache_dir / f"{path.stem}.words.json"
     if not force:

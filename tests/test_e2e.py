@@ -164,6 +164,16 @@ class EndToEnd(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
+    def test_missing_mic_track_falls_back(self):
+        from kdcut.media import AudioStream, MediaInfo, pick_mic_track
+        one = MediaInfo(path=Path("a.mp4"), duration=1, has_video=True, audio=[AudioStream(0, 2, "")])
+        said = []
+        self.assertEqual(pick_mic_track(one, "2", log=said.append), 0)
+        self.assertIn("only has 1 track", said[0])
+        two = MediaInfo(path=Path("b.mkv"), duration=1, has_video=True,
+                        audio=[AudioStream(0, 2, "Game"), AudioStream(1, 1, "Mic")])
+        self.assertEqual(pick_mic_track(two, "3"), 1)
+
     def test_mic_track_auto_picks_titled_track(self):
         info = media.probe(next((self.proj / "recordings").iterdir()))
         self.assertEqual(media.pick_mic_track(info, "auto"), 1)
