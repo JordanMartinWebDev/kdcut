@@ -49,6 +49,7 @@ class MediaInfo:
     vcodec: str = ""
     pix_fmt: str = ""
     webm_alpha: bool = False   # VP8/VP9 WebM with an alpha layer
+    tags: dict = field(default_factory=dict)   # container tags, lowercased keys (ID3 etc.)
 
     @property
     def has_alpha(self) -> bool:
@@ -81,7 +82,8 @@ def probe(path: Path) -> MediaInfo:
     streams = data.get("streams", [])
     is_image = path.suffix.lower() in IMAGE_EXTS
     duration = float(data.get("format", {}).get("duration") or 0.0)
-    info = MediaInfo(path=path, duration=duration, has_video=False, is_image=is_image)
+    info = MediaInfo(path=path, duration=duration, has_video=False, is_image=is_image,
+                     tags={str(k).lower(): str(v) for k, v in (data.get("format", {}).get("tags") or {}).items()})
     for s in streams:
         if s.get("codec_type") == "video" and s.get("disposition", {}).get("attached_pic") != 1:
             if not info.has_video:

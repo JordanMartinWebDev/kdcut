@@ -145,6 +145,58 @@ class MusicTests(unittest.TestCase):
         self.assertEqual(len(out), 3)
 
 
+class MusicLibraryTests(unittest.TestCase):
+    def test_tags_sfx_and_duplicates(self):
+        import shutil
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        if not shutil.which("ffmpeg"):
+            self.skipTest("ffmpeg missing")
+        from kdcut import music
+        from kdcut.assets import AssetIndex
+        d = Path(tempfile.mkdtemp())
+        lib_dir = d / "Music"
+        lib_dir.mkdir()
+
+        def make(name, secs, **tags):
+            meta = [x for k, v in tags.items() for x in ("-metadata", f"{k}={v}")]
+            subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", f"sine=duration={secs}",
+                            "-c:a", "libmp3lame", "-b:a", "32k", "-id3v2_version", "3", *meta,
+                            str(lib_dir / name)], check=True)
+
+        epic = dict(title="Peace in the Realm", artist="Jon Bjork", genre="Adventure, Fantasy",
+                    TBPM="90", TIT3="Low", grouping="Peaceful, Hopeful")
+        make("ES_Peace in the Realm - Jon Bjork.mp3", 25, **epic)
+        make("ES_Peace in the Realm - Jon Bjork (1).mp3", 25, **epic)
+        make("ES_Morning Birds - SFX Producer.mp3", 25, title="Morning Birds", artist="SFX Producer",
+             genre="Land Birds")
+        make("ES_Whoosh Transition 1 - SFX Producer.mp3", 1, title="Whoosh Transition 1",
+             artist="SFX Producer", genre="Whoosh, Production Element")
+        make("Mystery Song.mp3", 25)
+        lib = music.scan_library([lib_dir], cache_file=d / "idx.json", log=lambda m: None)
+        self.assertEqual(sorted(t.title for t in lib.music), ["Mystery Song", "Peace in the Realm"])
+        peace = next(t for t in lib.music if t.title == "Peace in the Realm")
+        self.assertEqual((peace.mood, peace.energy, peace.bpm), ("Peaceful, Hopeful", "Low", "90"))
+        self.assertNotIn("(1)", peace.path)
+        self.assertEqual(len(lib.duplicates), 1)
+        self.assertEqual(sorted(t.title for t in lib.sfx), ["Morning Birds", "Whoosh Transition 1"])
+        self.assertIn("Peaceful, Hopeful; low energy", music.library_text(lib.music, {}))
+        rows, untagged = music.coverage(lib)
+        self.assertIn(peace, next(c for c in rows if c.mood == "Calm").tracks)
+        self.assertEqual([t.title for t in untagged], ["Mystery Song"])
+        rep = music.report(lib)
+        self.assertIn("NEED  Tense", rep)
+        self.assertIn("Duplicate copies", rep)
+        idx = AssetIndex(music.sfx_assets(lib.sfx))
+        self.assertEqual(idx.best("whoosh", "sfx").name, "Whoosh Transition 1")
+        self.assertEqual(idx.best("birds ambience", "sfx").name, "Morning Birds")
+        # cached re-scan gives the same answer
+        again = music.scan_library([lib_dir], cache_file=d / "idx.json", log=lambda m: None)
+        self.assertEqual(len(again.music), 2)
+        self.assertEqual(len(again.sfx), 2)
+
+
 class ChapterTests(unittest.TestCase):
     def test_youtube_rules(self):
         ch = youtube_chapters([(3, "Intro"), (5, "Too close"), (60, "Mining"), (300, "Nether")], 600)

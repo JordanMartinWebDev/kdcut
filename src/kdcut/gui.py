@@ -407,8 +407,13 @@ class SettingsDialog(QDialog):
             self.music_vol.addItem(text, db)
         self.music_vol.setCurrentIndex(max(self.music_vol.findData(int(cfg["music"].get("volume_db", -20))), 0))
         mrow = QHBoxLayout()
+        mcheck = QPushButton("Check my library…")
+        mcheck.setToolTip("Count tracks per mood (calm, tense, action…) and say what's worth adding")
+        mcheck.clicked.connect(self.check_music)
+        self.music_check_btn = mcheck
         mrow.addWidget(madd)
         mrow.addWidget(mrem)
+        mrow.addWidget(mcheck)
         mrow.addStretch(1)
         mrow.addWidget(label("Volume", "hint", wrap=False))
         mrow.addWidget(self.music_vol)
@@ -518,6 +523,37 @@ class SettingsDialog(QDialog):
         d = QFileDialog.getExistingDirectory(self, "Choose an editing pack folder")
         if d and d not in self.pack_list():
             self.packs.addItem(str(Path(d)))
+
+    def check_music(self):
+        from kdcut import music
+        folders = [self.music_dirs.item(i).text() for i in range(self.music_dirs.count())]
+        if not folders:
+            QMessageBox.information(self, APP_NAME, "Add a music folder first.")
+            return
+        self.music_check_btn.setEnabled(False)
+        self.music_check_btn.setText("Checking…")
+
+        def finish():
+            self.music_check_btn.setEnabled(True)
+            self.music_check_btn.setText("Check my library…")
+
+        def done(text):
+            finish()
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Your music library")
+            dlg.resize(640, 560)
+            box = QPlainTextEdit(text)
+            box.setReadOnly(True)
+            box.setFont(QFont("Consolas", 10))
+            ok = QPushButton("Close")
+            ok.clicked.connect(dlg.accept)
+            lay = QVBoxLayout(dlg)
+            lay.addWidget(box)
+            lay.addWidget(ok, 0, Qt.AlignmentFlag.AlignRight)
+            dlg.exec()
+
+        self._connect_once(done, lambda e: (finish(), QMessageBox.warning(self, APP_NAME, str(e))))
+        run_in_thread(self.bridge, lambda: music.report(music.scan_library(folders, log=lambda m: None)))
 
     def add_music_dir(self):
         d = QFileDialog.getExistingDirectory(self, "Choose a music folder")

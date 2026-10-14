@@ -120,6 +120,17 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
 
     # 3. Plan -----------------------------------------------------------------------
     index = AssetIndex.load(Path(cfg["assets"]["index_path"]))
+    # Music folders: background music, plus any sound effects that live in there too.
+    mcfg = cfg.get("music", {})
+    library: list[music.Track] = []
+    if mcfg.get("folders"):
+        lib = music.scan_library(mcfg["folders"], log=r.log)
+        if mcfg.get("enabled", True) and video.get("music", True):
+            library = lib.music
+            r.log(f"Music library: {len(library)} track(s)")
+        if lib.sfx:
+            index = AssetIndex((index.assets if index else []) + music.sfx_assets(lib.sfx))
+            r.log(f"{len(lib.sfx)} sound effect(s) from the music folders added to the SFX choices")
     r.check()
     if broll_files is None:
         broll_files = media.list_media(project / "broll", media.VIDEO_EXTS | media.IMAGE_EXTS)
@@ -171,11 +182,6 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     durations = [i.duration for i in infos]
     kept_ids = [bid for rng in kept_ranges(blocks, plan, durations, ed) for bid in rng.block_ids]
     want_cold_open = bool(video.get("cold_open", ed.get("cold_open", True)))
-    mcfg = cfg.get("music", {})
-    library: list[music.Track] = []
-    if mcfg.get("enabled", True) and mcfg.get("folders") and video.get("music", True):
-        library = music.scan(mcfg["folders"], log=r.log)
-        r.log(f"Music library: {len(library)} track(s)")
     history = music.load_history()
     library_text = music.library_text(library, history) if library else ""
     md_file = out / "metadata.json"

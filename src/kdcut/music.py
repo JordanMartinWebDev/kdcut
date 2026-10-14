@@ -33,32 +33,73 @@ class Track:
     tags: list[str]          # from folder names (your mood folders)
     duration: float
     mtime: int = 0
+    genre: str = ""          # Epidemic Sound writes these into the file's tags
+    mood: str = ""
+    energy: str = ""
+    bpm: str = ""
+    sfx: bool = False        # a sound effect or ambience, not background music
 
     @property
     def name(self) -> str:
         return f"{self.title} - {self.artist}" if self.artist else self.title
+
+    @property
+    def words(self) -> set[str]:
+        text = " ".join(self.tags + [self.title, self.genre, self.mood, self.energy])
+        return set(re.findall(r"[a-z]+", text.lower()))
+
+
+INDEX_VERSION = 2
 
 
 def parse_name(stem: str) -> tuple[str, str]:
     """'ES_Flying Over Hills - Hallman' -> ('Flying Over Hills', 'Hallman')."""
     s = re.sub(r"^ES[_ ]+", "", stem).strip()
     s = re.sub(r"\s*\((?:\d+|instrumental version|main version)\)$", "", s, flags=re.I)
+    s = re.sub(r"(?<=\S)\(\d+\)$", "", s).strip()          # 'Beater Head(1)'
     if " - " in s:
         title, artist = s.rsplit(" - ", 1)
         return title.strip(), artist.strip()
     return s.replace("_", " ").strip(), ""
 
 
-def scan(folders: list[str | Path], cache_file: Path | None = None, log=print) -> list[Track]:
-    """Index music folders. Durations are cached so re-scans are instant."""
+def looks_like_sfx(artist: str, duration: float, genre: str, mood: str, bpm: str, folders: list[str]) -> bool:
+    """Epidemic sound effects are credited to 'SFX Producer' and carry no mood or tempo.
+    Short clips are stingers/effects too. Anything in a folder called SFX counts."""
+    if "sfx" in artist.lower() or any(re.search(r"\b(sfx|sound ?effects?|foley)\b", f.lower()) for f in folders):
+        return True
+    if duration < 20:
+        return True
+    return bool(genre) and not mood and not bpm     # e.g. 'Land Birds' ambience
+
+
+def _copy_rank(path: str) -> tuple[int, int, str]:
+    """Prefer 'Song.mp3' over 'Song (1).mp3' and 'Song_copy.mp3' when both exist."""
+    stem = Path(path).stem
+    copy = bool(re.search(r"\(\d+\)$|copy$", stem, flags=re.I))
+    return (int(copy), len(stem), path)
+
+
+@dataclass
+class Library:
+    music: list[Track] = field(default_factory=list)
+    sfx: list[Track] = field(default_factory=list)
+    duplicates: list[str] = field(default_factory=list)   # extra copies that were ignored
+
+
+def scan_library(folders: list[str | Path], cache_file: Path | None = None, log=print) -> Library:
+    """Index music folders: background music, sound effects, and duplicate copies.
+    Tags and durations are cached so re-scans are instant."""
     cache_file = cache_file or (HOME_DIR / "music_index.json")
     cached: dict[str, dict] = {}
     if cache_file.is_file():
         try:
-            cached = {t["path"]: t for t in json.loads(cache_file.read_text(encoding="utf-8"))}
+            data = json.loads(cache_file.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data.get("version") == INDEX_VERSION:
+                cached = {t["path"]: t for t in data["tracks"]}
         except (OSError, json.JSONDecodeError, KeyError, TypeError):
             cached = {}
-    tracks: list[Track] = []
+    found: list[Track] = []
     for folder in folders:
         root = Path(folder).expanduser()
         if not root.is_dir():
@@ -70,23 +111,65 @@ def scan(folders: list[str | Path], cache_file: Path | None = None, log=print) -
             mtime = int(p.stat().st_mtime)
             c = cached.get(str(p))
             if c and c.get("mtime") == mtime:
-                tracks.append(Track(**c))
-                continue
+                try:
+                    found.append(Track(**c))
+                    continue
+                except TypeError:
+                    pass
             try:
-                dur = media.probe(p).duration
+                info = media.probe(p)
             except media.MediaError:
                 continue
-            if dur < 20:          # stingers and SFX don't make background music
-                continue
+            t = info.tags
             title, artist = parse_name(p.stem)
-            tags = [part for part in p.relative_to(root).parent.parts if part]
-            tracks.append(Track(str(p), title, artist, tags, round(dur, 1), mtime))
+            title = t.get("title", "").strip() or title
+            artist = t.get("artist", "").strip() or artist
+            folders_ = [part for part in p.relative_to(root).parent.parts if part]
+            genre = t.get("genre", "").strip()
+            mood = (t.get("grouping") or t.get("tit1") or t.get("mood") or "").strip()
+            energy = (t.get("tit3") or t.get("energy") or "").strip()
+            bpm = (t.get("tbpm") or t.get("bpm") or "").strip()
+            sfx = looks_like_sfx(artist, info.duration, genre, mood, bpm, folders_)
+            found.append(Track(str(p), title, artist, folders_, round(info.duration, 1), mtime,
+                               genre, mood, energy, bpm, sfx))
     try:
         cache_file.parent.mkdir(parents=True, exist_ok=True)
-        cache_file.write_text(json.dumps([asdict(t) for t in tracks]), encoding="utf-8")
+        cache_file.write_text(json.dumps({"version": INDEX_VERSION, "tracks": [asdict(t) for t in found]}),
+                              encoding="utf-8")
     except OSError:
         pass
-    return tracks
+
+    lib = Library()
+    groups: dict[tuple, list[Track]] = {}
+    for t in found:
+        key = (t.title.lower(), t.artist.lower(), round(t.duration))
+        groups.setdefault(key, []).append(t)
+    for copies in groups.values():
+        copies.sort(key=lambda t: _copy_rank(t.path))
+        keep = copies[0]
+        lib.duplicates += [c.path for c in copies[1:]]
+        (lib.sfx if keep.sfx else lib.music).append(keep)
+    order = {t.path: i for i, t in enumerate(found)}
+    lib.music.sort(key=lambda t: order[t.path])
+    lib.sfx.sort(key=lambda t: order[t.path])
+    return lib
+
+
+def scan(folders: list[str | Path], cache_file: Path | None = None, log=print) -> list[Track]:
+    """Just the background music (sound effects and duplicate copies left out)."""
+    return scan_library(folders, cache_file, log).music
+
+
+def sfx_assets(sfx: list[Track]) -> list:
+    """Sound effects found in the music folders, in the same shape as editing-pack assets,
+    so the AI's sound-effect picks can use them."""
+    from kdcut.assets import Asset, _singular, _tokenize
+    out = []
+    for t in sfx:
+        toks = _tokenize(t.title) + _tokenize(t.genre.replace(",", " ")) + [x for f in t.tags for x in _tokenize(f)]
+        toks = list(dict.fromkeys(_singular(x) for x in toks if not x.isdigit()))
+        out.append(Asset(path=t.path, category="sfx", kind="audio", tokens=toks, name=t.title))
+    return out
 
 
 # --------------------------------------------------------------------------------------
@@ -117,9 +200,18 @@ def library_text(tracks: list[Track], history: dict[str, float], limit: int = 15
     week = time.time() - 7 * 86400
     lines = []
     for t in tracks[:limit]:
-        tags = f" [{', '.join(t.tags)}]" if t.tags else ""
+        about = [", ".join(t.tags)] if t.tags else []
+        if t.mood:
+            about.append(t.mood)
+        if t.energy:
+            about.append(f"{t.energy.lower()} energy")
+        if t.genre:
+            about.append(t.genre)
+        if t.bpm:
+            about.append(f"{t.bpm} bpm")
+        desc = f" [{'; '.join(about)}]" if about else ""
         recent = " (used recently)" if history.get(t.path, 0) > week else ""
-        lines.append(f"- {t.name}{tags} {int(t.duration // 60)}:{int(t.duration % 60):02d}{recent}")
+        lines.append(f"- {t.name}{desc} {int(t.duration // 60)}:{int(t.duration % 60):02d}{recent}")
     return "\n".join(lines)
 
 
@@ -144,9 +236,8 @@ class Placement:
 
 
 def _similar(track: Track, pool: list[Track]) -> list[Track]:
-    words = set(" ".join(track.tags).lower().split()) | set(track.title.lower().split())
-    return sorted(pool, key=lambda t: -len(words & (set(" ".join(t.tags).lower().split())
-                                                    | set(t.title.lower().split()))))
+    words = track.words
+    return sorted(pool, key=lambda t: -len(words & t.words))
 
 
 def fill(cues: list[Cue], library: list[Track], history: dict[str, float],
@@ -205,3 +296,101 @@ RULES = (
     "out where silence is stronger (a scary moment, a big reveal, an emotional beat). Avoid "
     "tracks marked (used recently) so episodes don't all sound the same."
 )
+
+
+# --------------------------------------------------------------------------------------
+# "Do I have enough music?" — coverage by the moods a Minecraft video needs
+# --------------------------------------------------------------------------------------
+
+# (name, what it's for, words that count, words that rule it out)
+MOODS = [
+    ("Calm", "building, farming, chill chatting",
+     {"peaceful", "laid", "relaxing", "dreamy", "floating", "lullaby", "ambient", "lofi", "calm", "chill",
+      "cozy", "acoustic", "piano", "low"}, {"dark", "suspense", "chasing", "epic", "angry", "scary"}),
+    ("Adventure", "exploring, travelling, new biomes",
+     {"adventure", "fantasy", "folk", "countryside", "celtic", "medieval", "orchestral", "acoustic",
+      "exploring", "journey"}, {"dark", "scary"}),
+    ("Upbeat", "intros, montages, good news",
+     {"happy", "euphoric", "pop", "beats", "disco", "funk", "house", "party", "electro", "glamorous"},
+     {"sad", "dark", "low"}),
+    ("Funny", "fails, silly moments, bits",
+     {"funny", "quirky", "eccentric", "silly", "cartoon", "comedy", "playful", "sneaky"}, set()),
+    ("Tense", "caves, the Nether, low health, night",
+     {"dark", "mysterious", "suspense", "scary", "tense", "weird", "horror", "thriller", "mystery", "creepy",
+      "eerie", "drone"}, set()),
+    ("Action", "fights, boss battles, raids, escapes",
+     {"epic", "chasing", "heavy", "angry", "aggressive", "action", "trailer", "battle", "busy", "frantic"},
+     {"low", "peaceful", "laid"}),
+    ("Emotional", "big moments, endings, losses",
+     {"sad", "sentimental", "melancholic", "nostalgic", "heartfelt"}, {"high"}),
+]
+ENOUGH = 8      # about four episodes before a mood has to repeat a track within the same week
+THIN = 4
+
+
+def mood_buckets(track: Track) -> list[str]:
+    w = track.words
+    if not (track.mood or track.genre):
+        return []
+    return [name for name, _, want, avoid in MOODS if w & want and not w & avoid]
+
+
+@dataclass
+class Coverage:
+    mood: str
+    use: str
+    tracks: list[Track]
+
+    @property
+    def status(self) -> str:
+        n = len(self.tracks)
+        return "good" if n >= ENOUGH else "thin" if n >= THIN else "missing"
+
+
+def coverage(lib: Library) -> tuple[list[Coverage], list[Track]]:
+    """Tracks per mood (a track can count for several), plus the untagged ones."""
+    rows = [Coverage(name, use, []) for name, use, _, _ in MOODS]
+    by = {c.mood: c for c in rows}
+    untagged = []
+    for t in lib.music:
+        b = mood_buckets(t)
+        if not b and not (t.mood or t.genre):
+            untagged.append(t)
+        for name in b:
+            by[name].tracks.append(t)
+    return rows, untagged
+
+
+SEARCH_TIPS = {
+    "Calm": "Epidemic Sound > Music > Moods: Peaceful / Laid Back, Energy: Low (try 'acoustic', 'lofi', 'ambient')",
+    "Adventure": "Genres: Adventure, Fantasy & Dreamy, Folk; Moods: Hopeful, Restless",
+    "Upbeat": "Moods: Happy, Euphoric; Genres: Pop, Beats, Funk",
+    "Funny": "Moods: Quirky, Eccentric, Sneaky; Genre: Quirky & Funny",
+    "Tense": "Moods: Mysterious, Dark, Suspense; Genres: Mystery, Horror, Drone",
+    "Action": "Moods: Epic, Chasing; Genres: Action, Trailer, Hybrid Orchestral",
+    "Emotional": "Moods: Sad, Sentimental, Hopeful; Genre: Cinematic / Piano",
+}
+
+
+def report(lib: Library) -> str:
+    rows, untagged = coverage(lib)
+    mark = {"good": "OK  ", "thin": "THIN", "missing": "NEED"}
+    out = [f"{len(lib.music)} music tracks, {len(lib.sfx)} sound effects"
+           + (f", {len(lib.duplicates)} duplicate copies ignored" if lib.duplicates else ""), ""]
+    for c in rows:
+        out.append(f"{mark[c.status]}  {c.mood:<10} {len(c.tracks):>3}  ({c.use})")
+    short = [c for c in rows if c.status != "good"]
+    if short:
+        out += ["", f"Worth adding (aim for {ENOUGH}+ each so episodes don't repeat):"]
+        for c in short:
+            out.append(f"- {c.mood}: {ENOUGH - len(c.tracks)} more. {SEARCH_TIPS[c.mood]}")
+    if untagged:
+        out += ["", f"{len(untagged)} track(s) have no mood tags, so the AI only sees their names. "
+                    "Put them in mood folders (Calm/, Tense/...) to help it pick:"]
+        out += [f"- {t.name}" for t in untagged[:20]]
+    if lib.sfx:
+        out += ["", "Sound effects found here (used for SFX, never as music): "
+                + ", ".join(t.title for t in lib.sfx[:30])]
+    if lib.duplicates:
+        out += ["", "Duplicate copies (safe to delete):"] + [f"- {Path(p).name}" for p in lib.duplicates]
+    return "\n".join(out)

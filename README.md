@@ -69,8 +69,17 @@ your Epidemic account so the music isn't claimed. KDcut never downloads music it
 The AI matches music to each part of the video: calm for building, tense for caves and fights,
 upbeat for the intro. It leaves silence where that's stronger, and avoids tracks you used in the
 last week. Music goes on its own audio track at background volume (Quiet, Normal or Louder), after
-the cold open. Mood subfolders (`Calm`, `Tense`, `Upbeat`, `Funny`) help the AI choose; Epidemic's
-`ES_Track Name - Artist` filenames are read automatically.
+the cold open. Epidemic files carry their mood, energy, genre and tempo inside the file, and KDcut
+reads those, so the AI knows "Peaceful, low energy" from "Dark, suspense". For music from elsewhere,
+mood subfolders (`Calm`, `Tense`, `Upbeat`, `Funny`) do the same job.
+
+Sound effects can live in the same folder. Anything credited to "SFX Producer", anything under 20
+seconds, and ambiences with no mood or tempo are kept out of the music and added to the sound-effect
+choices instead. Duplicate downloads (`Song (1).mp3`) are only used once.
+
+**Check my library…** in Settings counts your tracks per mood (calm, adventure, upbeat, funny, tense,
+action, emotional), flags the thin ones with what to search for on Epidemic, and lists untagged
+tracks and duplicate copies.
 
 With **Lower the music while I talk** on (the default), KDcut pre-mixes one music bed that dips
 about 10 dB under your voice and comes back up in the gaps. Turn it off to get separate track clips
