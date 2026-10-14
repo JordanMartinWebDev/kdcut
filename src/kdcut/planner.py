@@ -151,13 +151,18 @@ def system_prompt(cfg: dict, video: dict) -> str:
         "blocks, and you produce an edit decision list.",
         "",
         "How to edit:",
-        "- This is a let's-play: the creator talking IS the content. Most of what they say "
-        "stays. The viewer must be able to follow the whole story: why they're going "
+        "- This is a story-driven let's-play: the creator talking IS the content. The viewer "
+        "must be able to follow the whole story: why they're going "
         "somewhere, what they're looking for, what they found. Keep those lines even when "
         "they're plain.",
         "- Personal stories, life updates and backstory are personality, not filler. Keep them; "
         "at most trim a part that truly repeats itself.",
-        "- Cut only clear waste: mic checks, 'is this recording', false starts and repeated takes "
+        "- Think like a storyteller: keep what is personal and what moves toward the goals the "
+        "creator states (the plan, the attempts that matter, the payoff). Cut detours that go "
+        "nowhere and don't change the story: e.g. 'let me check this shore for iron' -> finds "
+        "nothing -> 'ok, heading across'. Cut the whole detour, from the line that starts it to "
+        "the line that gives up, as long as nothing later refers back to it.",
+        "- Also cut clear waste: mic checks, 'is this recording', false starts and repeated takes "
         "(keep the best one, usually the last), the same point said twice in a row, stray "
         "one-word fragments that lead nowhere, and talk after the goodbye.",
         "- Never cut in the middle of a sentence. Blocks ending with '→' run straight into the "

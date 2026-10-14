@@ -63,8 +63,9 @@ for another round; earlier ones are never overwritten.
 ## How the AI edits
 
 It's a let's-play, so your talking is the content: the AI keeps the story, your stories and your
-reactions, and only cuts clear waste (mic checks, retakes, the same point twice, stray fragments,
-talk after the goodbye). There's no target length. It never cuts in the middle of a sentence; if it
+reactions, and what moves toward the goals you state. It cuts detours that go nowhere (checking a
+shore for iron, finding none, moving on) and clear waste (mic checks, retakes, the same point twice,
+stray fragments, talk after the goodbye). There's no target length. It never cuts in the middle of a sentence; if it
 tries, KDcut puts the sentence back and says so in `review.md`. Pauses while you think of what to
 say next are cut for a snappy edit; the AI only keeps silent gameplay where something is happening.
 
