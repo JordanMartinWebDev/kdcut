@@ -320,3 +320,19 @@ class VoiceSnapTests(unittest.TestCase):
         self.assertGreaterEqual(ranges[0].end, 5.8)               # whole word kept
         self.assertFalse(any(16.0 < r.end and r.start < 17.0 for r in ranges))   # no stray frames
         self.assertEqual(ranges[-1].block_ids, ["B4"])
+
+
+class OverlayDefaultTests(unittest.TestCase):
+    def test_graphics_are_off_unless_turned_on(self):
+        from kdcut import config, planner
+        seen = {}
+
+        def fake(cfg, system, user, name, desc, schema):
+            seen.update(system=system, schema=schema)
+            return {"drop": [], "chapters": [], "overlays": [{"at": "B0001", "query": "x"}]}
+        from kdcut.blocks import Block
+        from pathlib import Path
+        plan = planner.make_plan([Block("B0001", 0, 0, 2, "hi.")], [Path("a.mkv")], config.DEFAULTS,
+                                 {}, [], {}, caller=fake, log=lambda m: None)
+        self.assertNotIn("overlays", seen["schema"]["properties"])
+        self.assertIn("Don't add on-screen graphics", seen["system"])

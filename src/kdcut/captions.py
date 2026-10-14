@@ -89,6 +89,32 @@ def find_phrase(phrase: str, words: list, after: float = 0.0) -> float | None:
     return words[best_i].start if best_i is not None and best >= 0.6 else None
 
 
+def find_phrase_span(phrase: str, words: list, after: float = 0.0, before: float = float("inf")
+                     ) -> tuple[float, float] | None:
+    """(start, end) of a short phrase in the word list, matched tolerantly like find_phrase.
+    Words are searched between `after` and `before`."""
+    target = _norm(phrase)
+    if not target:
+        return None
+    pool = [w for w in words if after <= w.start <= before]
+    toks = [(_norm(w.text) or [""])[0] for w in pool]
+    n = len(target)
+    best, best_i = 0.0, None
+    for i in range(len(toks)):
+        window = toks[i:i + n]
+        if not window:
+            break
+        score = sum(1 for a, b in zip(target, window) if a == b) / n
+        if score > best:
+            best, best_i = score, i
+            if score == 1.0:
+                break
+    if best_i is None or best < (0.6 if n >= 2 else 1.0):
+        return None
+    last = pool[min(best_i + n, len(pool)) - 1]
+    return pool[best_i].start, last.end
+
+
 def retime_chapters(chapters: list[tuple[str, str, float]], words: list) -> list[tuple[float, str]]:
     """chapters: (title, anchor phrase, old time). Find each anchor in the final export's
     transcript; keep the old time when it can't be found. First chapter is always 0:00."""

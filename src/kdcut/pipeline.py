@@ -22,7 +22,7 @@ from kdcut import audioprep, captions, graphics, vad, ducking, fcpxml, media, me
 from kdcut.assets import AssetIndex
 from kdcut.blocks import fmt_ts
 from kdcut.planner import Plan
-from kdcut.timeline import Clip, Marker, _Lanes, build, cold_open_range, kept_ranges, nearest_kept
+from kdcut.timeline import Clip, Marker, _Lanes, build, kept_ranges, nearest_kept, teaser_range
 
 
 def _video_settings(project: Path) -> dict:
@@ -207,6 +207,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         cached = json.loads(md_file.read_text(encoding="utf-8")) if md_file.is_file() else {}
         if (cached and cached.pop("_cold_open_requested", None) == want_cold_open
                 and cached.pop("_music_requested", False) == bool(library)
+                and cached.pop("_rules", 0) == metadata.RULES_VERSION
                 and md_file.stat().st_mtime >= plan_file.stat().st_mtime):
             md = metadata.Metadata(**cached)
         else:
@@ -215,7 +216,8 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
                 md = metadata.generate(cfg, video, [by_id[i] for i in kept_ids], caller=call,
                                        cold_open=want_cold_open, notes=notes, music_library=library_text)
                 md_file.write_text(json.dumps({**md.__dict__, "_cold_open_requested": want_cold_open,
-                                               "_music_requested": bool(library)},
+                                               "_music_requested": bool(library),
+                                               "_rules": metadata.RULES_VERSION},
                                               indent=2, ensure_ascii=False), encoding="utf-8")
             except Exception as exc:  # packaging is a bonus; never lose the timeline over it
                 r.log(f"titles/description skipped: {exc}")
@@ -229,7 +231,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     prefix = None
     if md.cold_open and md.cold_open.get("id") in by_id:
         cb = by_id[md.cold_open["id"]]
-        prefix = cold_open_range(cb, md.cold_open.get("seconds", 6), durations[cb.source])
+        prefix = teaser_range(cb, md.cold_open, words[cb.source], durations[cb.source], voices.get(cb.source))
 
     # 4. Timeline -------------------------------------------------------------------
     r.check()
@@ -323,7 +325,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         review.append(f"{fmt_ts(tl.seconds(rec))}  B-roll  {path.name}"
                       + (f"  ({item['reason']})" if item.get("reason") else ""))
 
-    for n, item in enumerate(plan.overlays):
+    for n, item in enumerate(plan.overlays if ed.get("overlays", False) else []):
         rec = anchor(item["at"])
         if rec is None:
             continue
@@ -425,16 +427,22 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
                 for i, (s, tr, why) in enumerate(raw)]
         pieces = [pc for pc in music.fill(cues, library, history, seed=len(blocks)) if pc.length >= 2]
         vol = float(mcfg.get("volume_db", -20))
+        # Every track is levelled first (Epidemic and other sources differ by 10 dB or more),
+        # then sits about 16 dB under your voice while you talk (setting "Normal") and comes
+        # up 8 dB in the gaps.
+        levels = [audioprep.music_gain(Path(pc.track.path)) for pc in pieces]
+        talk_db, gap_db = vol + 2.0, vol + 10.0
         for pc in pieces:
             review.append(f"{fmt_ts(pc.start)}  Music  {pc.track.name}")
         bed = None
         if pieces and mcfg.get("duck", True):
             # One pre-mixed music bed that dips under your voice.
             speech = [(tl.seconds(starts[b]), tl.seconds(ends[b])) for b in starts]
-            gains = ducking.envelope(speech, total, talk_db=vol - 4, gap_db=vol + 6)
+            gains = ducking.envelope(speech, total, talk_db=talk_db, gap_db=gap_db)
             try:
                 r.log("Mixing the music so it dips while you talk")
-                bed = ducking.render_bed(pieces, total, gains, out / "music_bed.m4a", start=music_start)
+                bed = ducking.render_bed(pieces, total, gains, out / "music_bed.m4a", start=music_start,
+                                         levels=levels)
             except Exception as exc:
                 r.log(f"Music ducking skipped ({exc}); placing tracks at a steady level")
         if bed is not None:
@@ -443,14 +451,15 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             tl.connected.append(Clip(path=bed, src_in=0, dur=dur, rec=rec, lane=lanes.place(music_lane, rec, dur),
                                      enable="audio", role="music", name="Music (dips under voice)"))
         else:
-            for pc in pieces:
+            for pc, lvl in zip(pieces, levels):
                 rec = tl.frames(pc.start)
                 dur = min(tl.frames(pc.length), tl.duration - rec)
                 if dur <= tl.frames(2):
                     continue
                 tl.connected.append(Clip(path=Path(pc.track.path), src_in=tl.frames(pc.offset), dur=dur,
                                          rec=rec, lane=lanes.place(music_lane, rec, dur), enable="audio",
-                                         role="music", name=pc.track.name, volume_db=vol))
+                                         role="music", name=pc.track.name,
+                                         volume_db=round(vol + 4.0 + lvl, 1)))
         placed["music"] = len(pieces)
         music.record_use([pc.track.path for pc in pieces])
 

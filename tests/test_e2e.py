@@ -75,7 +75,8 @@ class FakeAI:
             "tags": ["minecraft", "castle"],
             "thumbnail_text": ["DIAMONDS!"],
             "thumbnail_moments": ["B0006"],
-            "cold_open": {"id": "B0006", "seconds": 4, "reason": "diamonds reaction"},
+            "cold_open": {"id": "B0006", "start_words": "oh my gosh diamonds", "end_words": "gosh diamonds",
+                          "lead_in": 0, "reason": "diamonds reaction"},
             "music": [{"at": "B0002", "track": "Calm Fields - Sleepy Fish", "why": "building"},
                       {"at": "B0008", "track": "", "why": "silence for the ending"}],
         }
@@ -147,7 +148,8 @@ class EndToEnd(unittest.TestCase):
         ff("-f", "lavfi", "-i", "sine=frequency=990:duration=2", str(mdir / "ES_Sting.mp3"))   # too short
         import kdcut.music as music_mod
         music_mod.HISTORY_FILE = home / "music_history.json"
-        cls.cfg = config._merge(cls.cfg, {"music": {"folders": [str(cls.tmp / "music")], "volume_db": -20}})
+        cls.cfg = config._merge(cls.cfg, {"music": {"folders": [str(cls.tmp / "music")], "volume_db": -20},
+                                          "edit": {"overlays": True}})
         cls.cfg = config._merge(cls.cfg, {"vision": {"enabled": True, "min_gap": 8},
                                           "thumbnails": {"characters_dir": str(chars),
                                                          "themes_dir": str(home / "themes")}})
@@ -265,19 +267,20 @@ class EndToEnd(unittest.TestCase):
         root = ET.fromstring(self.xml.split("<!DOCTYPE fcpxml>", 1)[1])
         first = root.find(".//sequence/spine")[0]
         self.assertTrue(first.get("name").startswith("Cold open"))
-        self.assertEqual(first.get("duration"), "240/60s")       # 4 seconds
+        secs = Fraction(first.get("duration")[:-1])
+        self.assertTrue(3 <= secs <= 5, secs)                     # the words, not a fixed length
         # Rendered black-and-white "coming up" clip; its audio still comes from the diamonds block.
         self.assertEqual(first.get("start"), "0s")
         voice = next(c for c in first if c.get("lane") == "-1")
-        self.assertEqual(voice.get("start"), f"{round((25.0 - 0.15) * 60)}/60s")
+        self.assertAlmostEqual(float(Fraction(voice.get("start")[:-1])), 25.0, delta=0.5)
         teaser = self.proj / "output" / ".work" / "teaser.mp4"
         self.assertTrue(teaser.exists())
-        self.assertAlmostEqual(media.probe(teaser).duration, 4.0, delta=0.15)
+        self.assertAlmostEqual(media.probe(teaser).duration, float(secs), delta=0.15)
         sat = subprocess.run(["ffmpeg", "-v", "error", "-ss", "1", "-i", str(teaser), "-frames:v", "1",
                               "-vf", "signalstats,metadata=print:key=lavfi.signalstats.SATAVG:file=-",
                               "-f", "null", "-"], capture_output=True, text=True).stdout
         self.assertLess(float(sat.split("SATAVG=")[1].split()[0]), 2.0)     # black and white
-        self.assertIn("Cold open: 4s teaser", self.review)
+        self.assertIn("Cold open: ", self.review)
         system_prompts = [c for c in self.ai.calls if c[0] == "submit_metadata"]
         self.assertIn("cold open", system_prompts[0][1])
         self.assertIn("[HIGHLIGHT]", system_prompts[0][1])
@@ -339,6 +342,8 @@ class EndToEnd(unittest.TestCase):
         bed = self.proj / "output" / "music_bed.m4a"
         self.assertTrue(bed.exists())
         self.assertGreater(media.probe(bed).duration, 5)
+        lufs, _ = audioprep.measure(bed)
+        self.assertTrue(-38 < lufs < -20, lufs)          # audible under a -16 LUFS voice
         self.assertIn("Music  Calm Fields - Sleepy Fish", self.review)
         prompt = next(c[1] for c in self.ai.calls if c[0] == "submit_metadata")
         self.assertIn("Lazy Sunday - Ava Low [Calm]", prompt)

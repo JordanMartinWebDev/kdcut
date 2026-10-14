@@ -32,7 +32,7 @@ class Plan:
         return cls(**{k: v for k, v in data.items() if k in known})
 
 
-RULES_VERSION = 3     # bump when the editing rules change, so saved plans are redone
+RULES_VERSION = 4     # bump when the editing rules change, so saved plans are redone
 
 
 def blocks_key(blocks: list[Block]) -> str:
@@ -146,6 +146,16 @@ SCHEMA = {
 }
 
 
+OVERLAY_RULE = (
+    "- Overlays (item spins, mob pictures) are for list moments only: when the creator "
+    "announces the goal or plan ('today I'm building an iron farm' -> iron ingot with the "
+    "text 'Iron Farm'), or names things to come or to watch out for ('we'll have to worry "
+    "about blazes and spiders' -> blaze, then spider, a second or so each). Never pop one "
+    "up just because the creator is looking at or mining something. Few videos need more "
+    "than 2-4. Give a short on-screen text label when it names the goal or topic."
+)
+
+
 def system_prompt(cfg: dict, video: dict) -> str:
     ch = cfg["channel"]
     lines = [
@@ -175,16 +185,12 @@ def system_prompt(cfg: dict, video: dict) -> str:
         "A let's-play should feel natural, not choppy.",
         "- Blocks marked [FORCED CUT] are already cut by the creator's spoken command; do not "
         "list them. Blocks marked [HIGHLIGHT] are moments the creator flagged as great: never "
-        "cut them, and consider an extend, SFX or overlay there.",
+        "cut them, and consider an extend or SFX there.",
         "- Blocks marked [CHAPTER] are where the creator wants a new chapter.",
         "- B-roll: place provided B-roll files where the commentary talks about what they "
         "show (e.g. a build timelapse over 'so I finished the walls'). Each file at most once.",
-        "- Overlays (item spins, mob pictures) are for list moments only: when the creator "
-        "announces the goal or plan ('today I'm building an iron farm' -> iron ingot with the "
-        "text 'Iron Farm'), or names things to come or to watch out for ('we'll have to worry "
-        "about blazes and spiders' -> blaze, then spider, a second or so each). Never pop one "
-        "up just because the creator is looking at or mining something. Few videos need more "
-        "than 2-4. Give a short on-screen text label when it names the goal or topic.",
+        OVERLAY_RULE if cfg["edit"].get("overlays", False) else
+        "- Don't add on-screen graphics or text; the creator adds those by hand.",
         "- Sound effects: only where a viewer would expect a sound: a punchline, a fail, a "
         "jump scare, a big reveal. Never ambience or background sounds. Fewer is better; none is "
         "fine. Use plain descriptive queries made of words from the vocabulary lists.",
@@ -304,7 +310,9 @@ def make_plan(blocks: list[Block], recordings: list[Path], cfg: dict, video: dic
         result = caller(
             cfg, sys_prompt,
             user_prompt(format_blocks(chunk, recordings, context, notes), remaining_broll, vocab),
-            "submit_edit", "Submit the edit decision list for these transcript blocks.", SCHEMA,
+            "submit_edit", "Submit the edit decision list for these transcript blocks.",
+            SCHEMA if cfg["edit"].get("overlays", False) else
+            {**SCHEMA, "properties": {k: v for k, v in SCHEMA["properties"].items() if k != "overlays"}},
         )
         chunk_ids = {b.id for b in chunk}
 

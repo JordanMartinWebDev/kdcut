@@ -64,10 +64,26 @@ class Timeline:
         return float(Fraction(frames) / self.fps)
 
 
-def cold_open_range(block: Block, seconds: float, duration: float) -> Range:
-    seconds = min(max(float(seconds), 3.0), 12.0)
-    start = max(block.start - 0.15, 0.0)
-    return Range(block.source, start, min(start + seconds, duration), [block.id])
+def teaser_range(block: Block, pick: dict, words: list, duration: float, voice=None) -> Range:
+    """The cold open, cut to the exact words the AI chose: from just before `start_words` to the
+    end of `end_words`, kept between 3 and 12 seconds. Falls back to the block's speech."""
+    from kdcut.captions import find_phrase_span
+    lead = min(max(float(pick.get("lead_in", 0.6) or 0.0), 0.0), 3.0)
+    # Speech in the block, skipping a stray word left before a pause ("oh ... dude dude").
+    talk_start = block.pauses[-1][1] if block.pauses else block.start
+    span = find_phrase_span(pick.get("start_words") or "", words, block.start - 1.0, block.end + 1.0)
+    first = span[0] if span else talk_start
+    end_span = find_phrase_span(pick.get("end_words") or "", words, first, first + 15.0)
+    last = end_span[1] if end_span else None
+    if last is None or last <= first:
+        last = first + float(pick.get("seconds", 6) or 6) - lead
+    if voice is not None:
+        first = voice.onset_before(first)
+        last = voice.offset_after(last)
+    start = max(first - lead, 0.0)
+    end = last + 0.4
+    end = min(max(end, start + 3.0), start + 12.0, duration)
+    return Range(block.source, start, end, [block.id])
 
 
 def kept_ranges(blocks: list[Block], plan: Plan, durations: list[float], edit: dict,

@@ -109,6 +109,14 @@ def sfx_gain(path: Path, target: float = SFX_LUFS) -> float:
     return gain_for(lufs, peak, target, lo=-24.0, hi=12.0, over=0.0)
 
 
+MUSIC_REF_LUFS = -14.0   # every track is brought to this first; the volume setting is relative to it
+
+
+def music_gain(path: Path) -> float:
+    """dB that brings a music track to MUSIC_REF_LUFS (tracks from different sources differ a lot)."""
+    return sfx_gain(path, target=MUSIC_REF_LUFS)
+
+
 # --------------------------------------------------------------------------------------
 # Recordings: one levelled audio file per track
 # --------------------------------------------------------------------------------------

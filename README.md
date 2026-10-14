@@ -69,12 +69,13 @@ stray fragments, talk after the goodbye). There's no target length. It never cut
 tries, KDcut puts the sentence back and says so in `review.md`. Pauses while you think of what to
 say next are cut for a snappy edit; the AI only keeps silent gameplay where something is happening.
 
-Item spins and mob pictures are used for "list" moments: when you announce the goal ("today I'm
-building an iron farm" gets the iron ingot and the text **IRON FARM**) or name things to come ("we'll
-have to watch out for blazes and spiders"). Sound effects are kept to clear moments: punchlines,
-fails, scares, reveals.
+On-screen graphics are yours to add: the AI doesn't place item spins or text unless you turn on
+**Let the AI add on-screen graphics** in Settings (then it uses them only for "list" moments, like
+announcing the goal). Sound effects are kept to clear moments: punchlines, fails, scares, reveals.
 
-**Start with a teaser** puts a few seconds of the best moment first, in black and white with
+**Start with a teaser** puts the episode's biggest moment first (a reveal, a near-death, your
+biggest reaction; never walking or setup), cut to the exact words from where the excitement starts
+to the peak of the reaction, in black and white with
 **COMING UP** in the corner, then a quick flash into the episode.
 
 ## Music

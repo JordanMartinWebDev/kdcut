@@ -24,11 +24,17 @@ SCHEMA = {
             "description": "Only when asked for. A 4-10 second teaser of the most exciting moment, "
                            "shown before the video starts to hook viewers. Omit if nothing is strong enough.",
             "properties": {
-                "id": {"type": "string", "description": "Block id where the teaser starts."},
+                "id": {"type": "string", "description": "Block id of the moment."},
+                "start_words": {"type": "string",
+                                "description": "The exact first 3-6 words of the teaser, copied from that block."},
+                "end_words": {"type": "string",
+                              "description": "The exact last 3-6 words of the teaser (may be in a following block)."},
+                "lead_in": {"type": "number", "minimum": 0, "maximum": 3,
+                            "description": "Seconds of picture before the first word, e.g. to see the thing appear."},
                 "seconds": {"type": "number", "minimum": 3, "maximum": 12},
                 "reason": {"type": "string"},
             },
-            "required": ["id", "seconds"],
+            "required": ["id", "start_words", "end_words", "reason"],
         },
     },
     "required": ["titles", "description", "tags", "thumbnail_text", "thumbnail_moments"],
@@ -57,12 +63,22 @@ def youtube_chapters(chapters: list[tuple[float, str]], total: float) -> list[tu
     return out if len(out) >= 3 else []
 
 
+RULES_VERSION = 2     # bump when these rules change, so saved packaging is redone
+
 COLD_OPEN_RULES = (
-    "Also pick a cold open: a 4-10 second teaser shown at the very start, before the intro, to "
-    "hook viewers. Choose the most exciting, instantly understandable moment (a near-death, a "
-    "huge reveal, a funny disaster, a big reaction), preferably from the second half, and cut "
-    "it right at the peak or just before the outcome so people stay to see what happens. "
-    "Strongly prefer moments marked [HIGHLIGHT]. Skip the cold open if nothing is strong."
+    "Also pick a cold open: a 4-10 second teaser shown at the very start (in black and white with "
+    "'COMING UP'), before the intro. It is the hook, so it must be the single biggest moment of "
+    "the episode: a huge reveal or discovery, a near-death, a death, a jump scare, a funny "
+    "disaster, a boss or big fight, or the creator's biggest reaction (shouting, 'no way', "
+    "'dude'). Prefer the second half. It must be instantly understandable with no context.\n"
+    "Never pick walking, travelling, mining, crafting, setup, explanations or calm talk.\n"
+    "Pick the exact words: start_words where the excitement starts (skip any 'oh', 'um' or "
+    "pause before it) and end_words at the peak of the reaction, before it is resolved or "
+    "explained, so viewers stay to see it. Use lead_in when the picture matters before the "
+    "first word (the thing appearing on screen). Use the [on screen] notes to check what is "
+    "visible. Strongly prefer moments marked [HIGHLIGHT].\n"
+    "If nothing in the video is genuinely exciting, leave cold_open out: no teaser is better "
+    "than a dull one."
 )
 
 

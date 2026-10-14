@@ -389,6 +389,10 @@ class SettingsDialog(QDialog):
                                       "I call my viewers 'the crew'.")
         self.notes.setFixedHeight(80)
         form.addRow("Your editing style", self.notes)
+        self.overlays_on = QCheckBox("Let the AI add on-screen graphics (item spins, text labels)")
+        self.overlays_on.setChecked(bool(cfg["edit"].get("overlays", False)))
+        self.overlays_on.setToolTip("Off: you add graphics yourself in Resolve. Sound effects and music aren't affected.")
+        form.addRow("", self.overlays_on)
 
         # Music
         self.music_on = QCheckBox("Add background music")
@@ -681,6 +685,7 @@ class SettingsDialog(QDialog):
         w["mic_track"] = self.mic.currentData()
         w["model"] = self.model.currentData()
         s.setdefault("channel", {})["style_notes"] = self.notes.toPlainText().strip()
+        s.setdefault("edit", {})["overlays"] = self.overlays_on.isChecked()
         s.setdefault("app", {})["projects_dir"] = self.projects.text().strip()
         s["app"]["check_updates"] = self.auto_update.isChecked()
         s.setdefault("thumbnails", {})["characters_dir"] = self.chars.text().strip()

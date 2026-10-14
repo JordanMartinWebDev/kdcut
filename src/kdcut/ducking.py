@@ -60,7 +60,8 @@ def _write_env(gains: list[float], path: Path) -> None:
         w.writeframes(pcm.tobytes())
 
 
-def render_bed(pieces: list, total: float, gains: list[float], dest: Path, start: float = 0.0) -> Path:
+def render_bed(pieces: list, total: float, gains: list[float], dest: Path, start: float = 0.0,
+               levels: list[float] | None = None) -> Path:
     """pieces: music.Placement items (timeline start, offset into track, length).
     Writes an AAC music bed covering [start, total) of the timeline."""
     if not pieces:
@@ -75,8 +76,9 @@ def render_bed(pieces: list, total: float, gains: list[float], dest: Path, start
             cmd += ["-ss", f"{pc.offset:.3f}", "-t", f"{pc.length:.3f}", "-i", pc.track.path]
             delay = int(max(pc.start - start, 0) * 1000)
             fade_out = max(pc.length - 2.0, 0)
+            lvl = levels[k] if levels else 0.0
             filters.append(f"[{k}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,"
-                           f"afade=t=in:d=1.5,afade=t=out:st={fade_out:.3f}:d=2,"
+                           f"volume={lvl:.1f}dB,afade=t=in:d=1.5,afade=t=out:st={fade_out:.3f}:d=2,"
                            f"adelay={delay}|{delay}[m{k}]")
         n = len(pieces)
         cmd += ["-i", str(env)]

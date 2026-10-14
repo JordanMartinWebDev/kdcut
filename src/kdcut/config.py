@@ -41,6 +41,7 @@ DEFAULTS: dict[str, Any] = {
         "block_gap": 0.8,          # silence that splits speech into blocks
         "max_block_seconds": 20.0,
         "cold_open": True,         # start with a short teaser of the best moment
+        "overlays": False,         # AI-placed item spins / text labels (off: you add graphics yourself)
     },
     "vision": {
         "enabled": False,          # let the AI look at frames from quiet stretches
