@@ -1,4 +1,4 @@
-"""Minimal Claude API client (standard library only) with forced tool output."""
+"""Minimal Claude API client (standard library only) with structured (tool) output."""
 
 from __future__ import annotations
 
@@ -49,14 +49,54 @@ def call_tool(cfg: dict, system: str, user, tool_name: str, tool_description: st
             "No Claude API key. Add one in Settings (get a key at console.anthropic.com), "
             "or turn off the AI edit."
         )
-    body = {
-        "model": cfg["llm"]["model"],
-        "max_tokens": int(cfg["llm"].get("max_tokens", 16000)),
-        "system": system,
-        "messages": [{"role": "user", "content": user}],
-        "tools": [{"name": tool_name, "description": tool_description, "input_schema": schema}],
-        "tool_choice": {"type": "tool", "name": tool_name},
-    }
+    model = cfg["llm"]["model"]
+    tools = [{"name": tool_name, "description": tool_description, "input_schema": schema}]
+    messages = [{"role": "user", "content": user}]
+    forced = model not in _NO_FORCED_TOOLS
+    nudged = False
+    while True:
+        body = {
+            "model": model,
+            "max_tokens": int(cfg["llm"].get("max_tokens", 16000)),
+            "system": system if forced else
+            f"{system}\n\nGive your answer only by calling the {tool_name} tool, exactly once.",
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": {"type": "tool", "name": tool_name} if forced else {"type": "auto"},
+        }
+        try:
+            payload = _post(key, body, retries)
+        except _ToolChoiceUnsupported:
+            # Some models (e.g. ones that always think first) refuse a forced tool call.
+            # Ask nicely instead, and remember for the rest of the session.
+            _NO_FORCED_TOOLS.add(model)
+            forced = False
+            continue
+        for block in payload.get("content", []):
+            if block.get("type") == "tool_use" and block.get("name") == tool_name:
+                return block["input"]
+        if payload.get("stop_reason") == "max_tokens":
+            raise LLMError("The AI's answer was cut off (max_tokens). Lower llm.window_blocks.")
+        found = _json_in_text(payload)
+        if found is not None:
+            return found
+        if nudged:
+            raise LLMError("The AI did not return a structured answer.")
+        nudged = True
+        messages = messages + [
+            {"role": "assistant", "content": payload.get("content") or [{"type": "text", "text": "..."}]},
+            {"role": "user", "content": f"Please give the answer now by calling the {tool_name} tool."},
+        ]
+
+
+_NO_FORCED_TOOLS: set[str] = set()
+
+
+class _ToolChoiceUnsupported(Exception):
+    pass
+
+
+def _post(key: str, body: dict, retries: int) -> dict:
     data = json.dumps(body).encode("utf-8")
     for attempt in range(retries):
         req = urllib.request.Request(API_URL, data=data, method="POST", headers={
@@ -66,10 +106,11 @@ def call_tool(cfg: dict, system: str, user, tool_name: str, tool_description: st
         })
         try:
             with urllib.request.urlopen(req, timeout=600) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-            break
+                return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "replace")[:500]
+            if exc.code == 400 and "tool_choice" in detail and body["tool_choice"]["type"] != "auto":
+                raise _ToolChoiceUnsupported() from exc
             if exc.code in (429, 500, 502, 503, 529) and attempt < retries - 1:
                 time.sleep(5 * (attempt + 1))
                 continue
@@ -79,13 +120,20 @@ def call_tool(cfg: dict, system: str, user, tool_name: str, tool_description: st
                 time.sleep(5 * (attempt + 1))
                 continue
             raise LLMError(f"Could not reach the Claude API: {exc.reason}") from exc
+    raise LLMError("Could not reach the Claude API.")
 
-    for block in payload.get("content", []):
-        if block.get("type") == "tool_use" and block.get("name") == tool_name:
-            return block["input"]
-    if payload.get("stop_reason") == "max_tokens":
-        raise LLMError("The AI's answer was cut off (max_tokens). Lower llm.window_blocks.")
-    raise LLMError("The AI did not return a structured answer.")
+
+def _json_in_text(payload: dict) -> dict | None:
+    """Fallback: the answer written out as JSON text instead of a tool call."""
+    text = "".join(b.get("text", "") for b in payload.get("content", []) if b.get("type") == "text")
+    i, j = text.find("{"), text.rfind("}")
+    if i < 0 or j <= i:
+        return None
+    try:
+        got = json.loads(text[i:j + 1])
+    except json.JSONDecodeError:
+        return None
+    return got if isinstance(got, dict) else None
 
 
 def check_key(key: str) -> tuple[bool, str]:
