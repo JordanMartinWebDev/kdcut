@@ -37,14 +37,19 @@ def _ffmpeg(cmd: list[str], timeout: float = 900) -> subprocess.CompletedProcess
         return subprocess.CompletedProcess(cmd, 1, "", "timed out")
 
 
-def measure(path: Path, stream: int | None = None, timeout: float = 900) -> tuple[float | None, float | None]:
-    """(integrated loudness in LUFS, true peak in dBTP). None when silent or unmeasurable."""
+def measure(path: Path, stream: int | None = None, timeout: float = 900, *, total: float | None = None,
+            label: str = "Measuring", log=None) -> tuple[float | None, float | None]:
+    """(integrated loudness in LUFS, true peak in dBTP). None when silent or unmeasurable.
+    With `total` (the file's length) the job is watched: progress is logged and a stall stops it."""
     cmd = ["ffmpeg", "-hide_banner", "-nostats", "-i", str(path)]
     if stream is not None:
         cmd += ["-map", f"0:a:{stream}"]
     # apad: very short sounds (a 0.5 s pop) are too short for an integrated reading otherwise.
     cmd += ["-vn", "-af", "apad=pad_dur=1,loudnorm=print_format=json", "-f", "null", "-"]
-    proc = _ffmpeg(cmd, timeout=timeout)
+    if total:
+        proc = media.run_watched(cmd, total, label=label, log=log, timeout=timeout)
+    else:
+        proc = _ffmpeg(cmd, timeout=timeout)
     m = re.findall(r"\{[^{}]*\"input_i\"[^{}]*\}", proc.stderr)
     if not m:
         return None, None
@@ -132,31 +137,48 @@ def split_tracks(rec: Path, info: media.MediaInfo, mic: int, dest_dir: Path, log
     stems = []
     limit = 300 + info.duration       # generous; a stuck ffmpeg must not hang the whole build
     for stream, kind, label, target in plan:
-        out = dest_dir / f"{rec.stem}.a{stream + 1}.{kind}.m4a"
-        meta = out.with_suffix(".json")
+        base = f"{rec.stem}.a{stream + 1}.{kind}"
+        meta = dest_dir / f"{base}.json"
         sig = {"size": st.st_size, "mtime": int(st.st_mtime), "stream": stream, "target": target, "v": 1}
         try:
             old = json.loads(meta.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             old = {}
-        if out.is_file() and old.get("sig") == sig:
-            stems.append(Stem(kind, label, out, old.get("gain", 0.0)))
+        done = Path(old.get("file") or dest_dir / f"{base}.m4a")
+        if old.get("sig") == sig and done.is_file():
+            stems.append(Stem(kind, label, done, old.get("gain", 0.0)))
             continue
-        log(f"Levelling {label.lower()} audio from {rec.name} (track {stream + 1})")
-        lufs, peak = measure(rec, stream, timeout=limit)
+        name = label.lower()
+        log(f"Levelling {name} audio from {rec.name} (track {stream + 1})")
+        lufs, peak = measure(rec, stream, timeout=limit, total=info.duration,
+                             label=f"Measuring {name} audio", log=log)
+        media.debug(f"{name}: {lufs} LUFS, peak {peak}")
         gain = gain_for(lufs, peak, target, over=12.0 if kind in ("voice", "mix") else 0.0)
         af = f"volume={gain}dB"
         if kind in ("voice", "mix"):
             af += ",alimiter=limit=0.89:level=disabled"      # catch shouts after the boost
-        proc = _ffmpeg(["ffmpeg", "-y", "-v", "error", "-i", str(rec), "-map", f"0:a:{stream}", "-vn",
-                        "-af", af, "-ar", "48000", "-c:a", "aac", "-b:a", "256k", str(out)], timeout=limit)
-        if proc.returncode != 0:
-            out.unlink(missing_ok=True)
+        src = ["ffmpeg", "-y", "-v", "error", "-i", str(rec), "-map", f"0:a:{stream}", "-vn"]
+        attempts = [
+            (dest_dir / f"{base}.m4a", ["-af", af, "-ar", "48000", "-c:a", "aac", "-b:a", "256k"]),
+            # Plan B: plain WAV, re-timed so gaps or glitches in the track can't stall the encoder.
+            (dest_dir / f"{base}.wav", ["-af", f"aresample=48000:async=1:first_pts=0,{af}",
+                                        "-c:a", "pcm_s16le", "-rf64", "auto"]),
+        ]
+        out, why = None, ""
+        for i, (dest, opts) in enumerate(attempts):
+            proc = media.run_watched(src + opts + [str(dest)], info.duration, log=log, timeout=limit,
+                                     label=f"Writing {name} audio" + (" (plan B)" if i else ""))
+            if proc.returncode == 0 and dest.is_file():
+                out = dest
+                break
+            dest.unlink(missing_ok=True)
+            why = (proc.stderr.strip().splitlines() or ["unknown error"])[0][:200]
+            log(f"Writing {name} audio failed: {why}" + ("; trying another way" if i == 0 else ""))
+        if out is None:
             if kind == "game":       # the recording's own audio still carries track 1
-                log(f"Skipped levelling game audio from {rec.name} ({proc.stderr.strip()[-200:]})")
+                log(f"Skipped levelling game audio from {rec.name}; using the recording's own audio")
                 continue
-            raise media.MediaError(f"Couldn't extract audio track {stream + 1} from {rec.name}: "
-                                   f"{proc.stderr.strip()[-400:]}")
-        meta.write_text(json.dumps({"sig": sig, "gain": gain, "lufs": lufs}), encoding="utf-8")
+            raise media.MediaError(f"Couldn't extract audio track {stream + 1} from {rec.name}: {why}")
+        meta.write_text(json.dumps({"sig": sig, "gain": gain, "lufs": lufs, "file": str(out)}), encoding="utf-8")
         stems.append(Stem(kind, label, out, gain))
     return stems

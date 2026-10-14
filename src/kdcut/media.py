@@ -75,6 +75,91 @@ def run_quiet(cmd: list[str], timeout: float | None = None, text: bool = True) -
                           timeout=timeout, creationflags=NO_WINDOW, **kw)
 
 
+# A plain-text log of the current build, kept next to its output (kdcut.log), so problems on
+# someone's PC can be diagnosed afterwards: every message plus the ffmpeg jobs and their errors.
+debug_log: Path | None = None
+
+
+def debug(message: str) -> None:
+    if debug_log is None:
+        return
+    try:
+        import time as _t
+        with open(debug_log, "a", encoding="utf-8") as fh:
+            fh.write(f"{_t.strftime('%H:%M:%S')} {message}\n")
+    except OSError:
+        pass
+
+
+def _clock(sec: float) -> str:
+    sec = max(int(sec), 0)
+    return f"{sec // 3600}:{sec // 60 % 60:02d}:{sec % 60:02d}" if sec >= 3600 else f"{sec // 60}:{sec % 60:02d}"
+
+
+def run_watched(cmd: list[str], total: float, *, label: str = "ffmpeg", log=None,
+                stall: float = 60.0, timeout: float | None = None) -> subprocess.CompletedProcess:
+    """Run a long ffmpeg job, reporting how far it has got and killing it if it stops
+    making progress for `stall` seconds. Never raises for ffmpeg's own failures:
+    check .returncode (-9 = stalled or timed out) and .stderr."""
+    import tempfile
+    import threading
+    import time as _t
+    full = ff(cmd)
+    full = [full[0], "-progress", "pipe:1", "-nostats", *full[1:]]
+    debug(f"run: {subprocess.list2cmdline(full)}")
+    err = tempfile.TemporaryFile()
+    proc = subprocess.Popen(full, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err,
+                            creationflags=NO_WINDOW)
+    state = {"t": 0.0, "changed": _t.monotonic(), "speed": ""}
+
+    def reader():
+        for raw in proc.stdout:
+            line = raw.decode("utf-8", "replace").strip()
+            if line.startswith("out_time_us=") or line.startswith("out_time_ms="):
+                try:
+                    t = int(line.split("=", 1)[1]) / 1e6
+                except ValueError:
+                    continue
+                if t > state["t"]:
+                    state["t"] = t
+                    state["changed"] = _t.monotonic()
+            elif line.startswith("speed="):
+                state["speed"] = line.split("=", 1)[1]
+
+    th = threading.Thread(target=reader, daemon=True)
+    th.start()
+    started = last_report = now = _t.monotonic()
+    killed = ""
+    while proc.poll() is None:
+        _t.sleep(0.5)
+        now = _t.monotonic()
+        if now - last_report >= 15:
+            last_report = now
+            msg = f"{label}: {_clock(state['t'])} of {_clock(total)} ({state['speed'] or '?'})"
+            debug(msg)
+            if log:
+                log(msg)
+        if now - state["changed"] > stall:
+            killed = f"stopped making progress at {_clock(state['t'])} of {_clock(total)}"
+        elif timeout and now - started > timeout:
+            killed = f"took longer than {int(timeout)} s (reached {_clock(state['t'])})"
+        if killed:
+            proc.kill()
+            break
+    proc.wait()
+    th.join(timeout=5)
+    err.seek(0)
+    stderr = err.read().decode("utf-8", "replace")
+    err.close()
+    if killed:
+        stderr = f"{killed}\n{stderr}"
+    code = -9 if killed else proc.returncode
+    debug(f"exit {code} after {now - started:.0f} s; reached {_clock(state['t'])}")
+    if stderr.strip():
+        debug("stderr: " + stderr.strip()[-3000:])
+    return subprocess.CompletedProcess(full, code, "", stderr)
+
+
 def _run(cmd: list[str]) -> str:
     proc = run_quiet(cmd)
     if proc.returncode != 0:

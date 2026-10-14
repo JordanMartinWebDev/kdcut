@@ -214,3 +214,33 @@ class FfmpegRunnerTests(unittest.TestCase):
         self.assertEqual(ff(["ffmpeg", "-i", "x"])[:2], ["ffmpeg", "-nostdin"])
         self.assertEqual(ff(["C:/kd/ffmpeg.exe", "-i", "x"])[1], "-nostdin")
         self.assertEqual(ff(["ffprobe", "-i", "x"]), ["ffprobe", "-i", "x"])
+
+
+class WatchedRunTests(unittest.TestCase):
+    def test_a_stalled_job_is_stopped_and_logged(self):
+        import os
+        import stat
+        import sys
+        import tempfile
+        from pathlib import Path
+        if sys.platform == "win32":
+            self.skipTest("uses a shell script")
+        from kdcut import media
+        d = Path(tempfile.mkdtemp())
+        fake = d / "ffmpeg"
+        fake.write_text("#!/bin/sh\necho out_time_us=65000000\necho speed=40x\necho stuck >&2\nsleep 30\n")
+        fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+        media.debug_log = d / "kdcut.log"
+        try:
+            said = []
+            proc = media.run_watched([str(fake), "-i", "x"], 600, label="Writing game audio",
+                                     log=said.append, stall=2)
+        finally:
+            media.debug_log = None
+        self.assertEqual(proc.returncode, -9)
+        self.assertIn("stopped making progress at 1:05 of 10:00", proc.stderr)
+        self.assertIn("stuck", proc.stderr)
+        text = (d / "kdcut.log").read_text()
+        self.assertIn("-nostdin", text)
+        self.assertIn("exit -9", text)
+        os.remove(fake)

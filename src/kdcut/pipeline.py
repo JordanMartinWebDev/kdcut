@@ -80,6 +80,10 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     out = Path(out_dir) if out_dir else project / "output"
     out.mkdir(parents=True, exist_ok=True)
     work = out / ".work"
+    media.debug_log = out / "kdcut.log"
+    media.debug(f"===== KDcut build of {out.name} =====")
+    _say = r.log
+    r.log = lambda m: (media.debug(m), _say(m))
     video = dict(video) if video is not None else _video_settings(project)
     call = caller or planner.llm.call_tool
 
