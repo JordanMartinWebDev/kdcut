@@ -18,7 +18,7 @@ import tomllib
 from pathlib import Path
 
 from kdcut import blocks as blocks_mod
-from kdcut import audioprep, captions, graphics, ducking, fcpxml, media, metadata, music, planner, transcribe, vision
+from kdcut import audioprep, captions, graphics, vad, ducking, fcpxml, media, metadata, music, planner, transcribe, vision
 from kdcut.assets import AssetIndex
 from kdcut.blocks import fmt_ts
 from kdcut.planner import Plan
@@ -188,7 +188,16 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     # decided now, before the timeline is built. Cached alongside plan.json.
     by_id = {b.id: b for b in blocks}
     durations = [i.duration for i in infos]
-    kept_ids = [bid for rng in kept_ranges(blocks, plan, durations, ed) for bid in rng.block_ids]
+    # Where the voice really starts and stops, so cuts don't clip words.
+    voices = {}
+    for src, (rec_path, info) in enumerate(zip(recordings, infos)):
+        if info.audio:
+            mic = media.pick_mic_track(info, cfg["whisper"].get("mic_track", "auto"))
+            got = vad.analyse(Path(rec_path), mic, work, log=r.log)
+            if got:
+                voices[src] = got
+        r.check()
+    kept_ids = [bid for rng in kept_ranges(blocks, plan, durations, ed, voices) for bid in rng.block_ids]
     want_cold_open = bool(video.get("cold_open", ed.get("cold_open", True)))
     history = music.load_history()
     library_text = music.library_text(library, history) if library else ""
@@ -227,7 +236,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     r.step(3, "Building timeline")
     name = video.get("title") or project.name
     tl, starts, ends = build(name, recordings, blocks, plan, fps, width, height,
-                             durations, ed, prefix=prefix)
+                             durations, ed, prefix=prefix, voices=voices)
     lanes = _Lanes()
     tcfg = cfg["timeline"]
 

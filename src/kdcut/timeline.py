@@ -70,7 +70,10 @@ def cold_open_range(block: Block, seconds: float, duration: float) -> Range:
     return Range(block.source, start, min(start + seconds, duration), [block.id])
 
 
-def kept_ranges(blocks: list[Block], plan: Plan, durations: list[float], edit: dict) -> list[Range]:
+def kept_ranges(blocks: list[Block], plan: Plan, durations: list[float], edit: dict,
+                voices: dict | None = None) -> list[Range]:
+    """Source ranges to keep. `voices` (source -> vad.Voice) snaps cut points to where the
+    voice really starts and stops, since Whisper's word timings are a little loose."""
     pad_b = float(edit.get("pad_before", 0.15))
     pad_a = float(edit.get("pad_after", 0.35))
     max_pause = float(edit.get("keep_pauses_up_to", 2.5))
@@ -80,45 +83,60 @@ def kept_ranges(blocks: list[Block], plan: Plan, durations: list[float], edit: d
     for b in blocks:
         by_source.setdefault(b.source, []).append(b)
 
+    def is_dropped(b: Block) -> bool:
+        return "forced_drop" in b.flags or b.id in plan.drop
+
     for src in sorted(by_source):
         src_blocks = by_source[src]
         limit = durations[src] if src < len(durations) else float("inf")
+        v = (voices or {}).get(src)
+        onset = (lambda t: v.onset_before(t)) if v else (lambda t: t)
+        offset = (lambda t: v.offset_after(t)) if v else (lambda t: t)
         cur: Range | None = None
+        cur_spoken_end = 0.0       # where the last kept words really end
         for i, b in enumerate(src_blocks):
-            dropped = "forced_drop" in b.flags or b.id in plan.drop
-            if dropped:
+            if is_dropped(b):
                 if cur:
-                    cur.end = min(cur.end, b.start)
+                    cur.end = min(cur.end, max(onset(b.start), cur_spoken_end))
                     ranges.append(cur)
                     cur = None
                 continue
-            prev_end = src_blocks[i - 1].end if i > 0 else 0.0
+            prev = src_blocks[i - 1] if i > 0 else None
             nxt = src_blocks[i + 1] if i + 1 < len(src_blocks) else None
+            # Real end of the cut words before this block, but never past where this block starts.
+            prev_end = 0.0 if prev is None else (
+                min(offset(prev.end), max(prev.end, b.start - 0.05)) if is_dropped(prev) else prev.end)
             # A block can hold a long wait between words ("all ... right"); treat each side
             # as its own piece so the wait is trimmed like any other pause.
-            cuts = [(a, z) for a, z in b.pauses if b.start < a < z < b.end]
             pieces, at = [], b.start
-            for a, z in cuts:
-                pieces.append((at, a))
-                at = z
+            for a, z in b.pauses:
+                if at < a < z < b.end:
+                    pieces.append((at, a))
+                    at = z
             pieces.append((at, b.end))
             for k, (p_start, p_end) in enumerate(pieces):
                 last = k == len(pieces) - 1
-                s = max(p_start - pad_b, prev_end if k == 0 else pieces[k - 1][1], 0.0)
-                e = p_end + pad_a + (plan.extend.get(b.id, 0.0) if last else 0.0)
+                if v and p_end - p_start < 1.5 and v.voiced(p_start - 0.1, p_end + 0.1) < 0.1:
+                    continue        # Whisper put a word where nothing was said: keep no frames
+                following = pieces[k + 1][0] if not last else (nxt.start if nxt else limit)
+                real_start = max(onset(p_start), prev_end if k == 0 else pieces[k - 1][1])
+                real_end = min(offset(p_end), max(p_end, following - 0.05))
+                s = max(real_start - pad_b, prev_end if k == 0 else pieces[k - 1][1], 0.0)
+                e = real_end + pad_a + (plan.extend.get(b.id, 0.0) if last else 0.0)
                 if not last:
-                    e = min(e, pieces[k + 1][0])
-                elif nxt is not None and ("forced_drop" in nxt.flags or nxt.id in plan.drop):
-                    e = min(e, nxt.start)
+                    e = min(e, max(pieces[k + 1][0], real_end))
+                elif nxt is not None and is_dropped(nxt):
+                    e = min(e, max(onset(nxt.start), real_end))
                 e = min(e, limit)
                 if cur and s - cur.end <= max_pause:
                     cur.end = max(cur.end, e)
-                    if k == 0:
+                    if b.id not in cur.block_ids:
                         cur.block_ids.append(b.id)
                 else:
                     if cur:
                         ranges.append(cur)
-                    cur = Range(src, s, e, [b.id] if k == 0 else [])
+                    cur = Range(src, s, e, [b.id])
+                cur_spoken_end = real_end
         if cur:
             ranges.append(cur)
     return [r for r in ranges if r.end - r.start > 0.05]
@@ -145,7 +163,7 @@ class _Lanes:
 
 def build(name: str, recordings: list[Path], blocks: list[Block], plan: Plan,
           fps: Fraction, width: int, height: int, durations: list[float], edit: dict,
-          prefix: Range | None = None) -> tuple[Timeline, dict[str, int], dict[str, int]]:
+          prefix: Range | None = None, voices: dict | None = None) -> tuple[Timeline, dict[str, int], dict[str, int]]:
     """Lay out the main story. Returns the timeline plus block-id -> timeline frame maps
     for the start and end of every kept block (used to place B-roll, SFX, chapters).
 
@@ -163,7 +181,7 @@ def build(name: str, recordings: list[Path], blocks: list[Block], plan: Plan,
             tl.main.append(Clip(path=recordings[prefix.source], src_in=src_in, dur=dur, rec=0,
                                 role="cold_open", name=f"Cold open - {recordings[prefix.source].stem}"))
             rec = dur
-    for r in kept_ranges(blocks, plan, durations, edit):
+    for r in kept_ranges(blocks, plan, durations, edit, voices):
         src_in = tl.frames(r.start)
         dur = tl.frames(r.end) - src_in
         if dur <= 0:
@@ -172,7 +190,7 @@ def build(name: str, recordings: list[Path], blocks: list[Block], plan: Plan,
                             name=recordings[r.source].stem))
         for bid in r.block_ids:
             b = by_id[bid]
-            starts[bid] = rec + max(tl.frames(b.start) - src_in, 0)
+            starts.setdefault(bid, rec + max(tl.frames(b.start) - src_in, 0))
             ends[bid] = min(rec + tl.frames(b.end) - src_in, rec + dur)
         rec += dur
     return tl, starts, ends

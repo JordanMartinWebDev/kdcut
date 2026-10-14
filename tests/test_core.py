@@ -293,3 +293,30 @@ class PauseTrimTests(unittest.TestCase):
         self.assertLess(kept, 5.5)                      # 2 s and 6 s waits are gone
         self.assertTrue(any(r.start <= 5.0 < r.end for r in ranges))     # "all" kept
         self.assertTrue(any(r.start <= 11.0 < r.end for r in ranges))    # "right go." kept
+
+
+class VoiceSnapTests(unittest.TestCase):
+    def test_cut_points_follow_the_real_voice(self):
+        from kdcut import config
+        from kdcut.blocks import Block
+        from kdcut.planner import Plan
+        from kdcut.timeline import kept_ranges
+        from kdcut.vad import STEP, Voice
+        lv = [-80.0] * int(40 / STEP)
+
+        def talk(a, b):
+            for i in range(int(a / STEP), int(b / STEP)):
+                lv[i] = -20.0
+        talk(1.0, 5.8)      # "...brand new everything" really ends at 5.8 (Whisper says 5.1)
+        talk(12.0, 16.2)    # the line the AI cut
+        talk(20.0, 25.0)
+        voice = Voice(lv, -40.0)
+        blocks = [Block("B1", 0, 1.0, 5.1, "brand new everything."),
+                  Block("B2", 0, 12.0, 16.0, "It really is a lot of brand news."),
+                  Block("B3", 0, 16.4, 16.8, "But"),          # Whisper put a word in silence
+                  Block("B4", 0, 20.0, 25.0, "that's OK.")]
+        plan = Plan(drop={"B2": "repeat"})
+        ranges = kept_ranges(blocks, plan, [40.0], config.DEFAULTS["edit"], {0: voice})
+        self.assertGreaterEqual(ranges[0].end, 5.8)               # whole word kept
+        self.assertFalse(any(16.0 < r.end and r.start < 17.0 for r in ranges))   # no stray frames
+        self.assertEqual(ranges[-1].block_ids, ["B4"])
