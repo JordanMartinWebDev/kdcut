@@ -89,8 +89,10 @@ def render_bed(pieces: list, total: float, gains: list[float], dest: Path, start
         filters.append("[bed][env]amultiply[out]")
         cmd += ["-filter_complex", ";".join(filters), "-map", "[out]",
                 "-c:a", "aac", "-b:a", "192k", str(dest)]
-        proc = subprocess.run(cmd, capture_output=True, text=True,
-                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        try:
+            proc = media.run_quiet(cmd, timeout=max(600.0, total * 2))
+        except subprocess.TimeoutExpired as exc:
+            raise media.MediaError("ffmpeg took too long mixing the music bed") from exc
         if proc.returncode != 0:
             raise media.MediaError(proc.stderr.strip()[-600:])
     media._PROBE_CACHE.pop(dest, None)

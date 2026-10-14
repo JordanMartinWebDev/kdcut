@@ -60,8 +60,23 @@ class MediaInfo:
         return bool(self.audio)
 
 
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def ff(cmd: list[str]) -> list[str]:
+    """ffmpeg must never wait on the keyboard: from a desktop app its stdin can be a stray
+    handle, and ffmpeg polling it can stall a job forever."""
+    return [cmd[0], "-nostdin", *cmd[1:]] if Path(cmd[0]).stem.lower() == "ffmpeg" else cmd
+
+
+def run_quiet(cmd: list[str], timeout: float | None = None, text: bool = True) -> subprocess.CompletedProcess:
+    kw = dict(encoding="utf-8", errors="replace") if text else {}
+    return subprocess.run(ff(cmd), capture_output=True, text=text, stdin=subprocess.DEVNULL,
+                          timeout=timeout, creationflags=NO_WINDOW, **kw)
+
+
 def _run(cmd: list[str]) -> str:
-    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    proc = run_quiet(cmd)
     if proc.returncode != 0:
         raise MediaError(f"{cmd[0]} failed: {proc.stderr.strip()[-800:]}")
     return proc.stdout
@@ -182,11 +197,11 @@ def extract_frame(src: Path, at: float, dest: Path, width: int | None = None) ->
 def corner_color(path: Path, frame: int = 5) -> tuple[int, int, int] | None:
     """Average colour of the top-left corner of one frame (used to spot green screens)."""
     try:
-        proc = subprocess.run(
+        proc = run_quiet(
             ["ffmpeg", "-v", "error", "-i", str(path), "-vf",
              f"select=gte(n\\,{frame}),crop=16:16:0:0,scale=1:1", "-frames:v", "1",
              "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
-            capture_output=True, timeout=60)
+            timeout=60, text=False)
     except (OSError, subprocess.TimeoutExpired):
         return None
     if len(proc.stdout) < 3:

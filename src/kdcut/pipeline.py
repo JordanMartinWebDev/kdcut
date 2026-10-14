@@ -236,11 +236,13 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             r.log(f"Kept the recording's own audio for {Path(rec_path).name}: {exc}")
         r.check()
     audio_lanes = 0
+    n_tracks = {str(p): len(i.audio) for p, i in zip(recordings, infos)}
     for clip in tl.main:
         got = stems.get(str(clip.path))
         if not got:
             continue
-        clip.enable = "video"
+        if len(got) == n_tracks[str(clip.path)]:
+            clip.enable = "video"       # every track is underneath; otherwise keep track 1 here
         for j, stem in enumerate(got):
             lanes.busy.setdefault(-(j + 1), []).append((clip.rec, clip.rec_end))
             tl.connected.append(Clip(path=stem.path, src_in=clip.src_in, dur=clip.dur, rec=clip.rec,

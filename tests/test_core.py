@@ -206,3 +206,11 @@ class ChapterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FfmpegRunnerTests(unittest.TestCase):
+    def test_ffmpeg_never_reads_the_keyboard(self):
+        from kdcut.media import ff
+        self.assertEqual(ff(["ffmpeg", "-i", "x"])[:2], ["ffmpeg", "-nostdin"])
+        self.assertEqual(ff(["C:/kd/ffmpeg.exe", "-i", "x"])[1], "-nostdin")
+        self.assertEqual(ff(["ffprobe", "-i", "x"]), ["ffprobe", "-i", "x"])

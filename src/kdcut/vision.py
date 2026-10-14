@@ -42,8 +42,7 @@ def loudness(path: Path, track: int, window: float = 0.5) -> list[tuple[float, f
            "ametadata=mode=print:key=lavfi.astats.Overall.RMS_level:file=-",
            "-f", "null", "-"]
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=3600,
-                             creationflags=_NO_WINDOW).stdout
+        out = media.run_quiet(cmd, timeout=3600).stdout
     except (OSError, subprocess.TimeoutExpired):
         return []
     result, t = [], None
@@ -70,8 +69,7 @@ def scene_changes(path: Path, threshold: float = 0.3) -> list[float]:
            f"scale=160:-2,select='gt(scene,{threshold})',metadata=mode=print:file=-",
            "-f", "null", "-"]
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=3600,
-                             creationflags=_NO_WINDOW).stdout
+        out = media.run_quiet(cmd, timeout=3600).stdout
     except (OSError, subprocess.TimeoutExpired):
         return []
     return [float(m) for m in re.findall(r"pts_time:([\d.]+)", out)]

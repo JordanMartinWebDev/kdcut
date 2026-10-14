@@ -30,19 +30,21 @@ LOUDNESS_CACHE = HOME_DIR / "loudness.json"
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
-def _ffmpeg(cmd: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                          creationflags=_NO_WINDOW)
+def _ffmpeg(cmd: list[str], timeout: float = 900) -> subprocess.CompletedProcess:
+    try:
+        return media.run_quiet(cmd, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(cmd, 1, "", "timed out")
 
 
-def measure(path: Path, stream: int | None = None) -> tuple[float | None, float | None]:
+def measure(path: Path, stream: int | None = None, timeout: float = 900) -> tuple[float | None, float | None]:
     """(integrated loudness in LUFS, true peak in dBTP). None when silent or unmeasurable."""
     cmd = ["ffmpeg", "-hide_banner", "-nostats", "-i", str(path)]
     if stream is not None:
         cmd += ["-map", f"0:a:{stream}"]
     # apad: very short sounds (a 0.5 s pop) are too short for an integrated reading otherwise.
     cmd += ["-vn", "-af", "apad=pad_dur=1,loudnorm=print_format=json", "-f", "null", "-"]
-    proc = _ffmpeg(cmd)
+    proc = _ffmpeg(cmd, timeout=timeout)
     m = re.findall(r"\{[^{}]*\"input_i\"[^{}]*\}", proc.stderr)
     if not m:
         return None, None
@@ -128,6 +130,7 @@ def split_tracks(rec: Path, info: media.MediaInfo, mic: int, dest_dir: Path, log
                 n = sum(1 for k in plan if k[1] == "game")
                 plan.append((a.index, "game", "Game" + (f" {n + 1}" if n else ""), GAME_LUFS))
     stems = []
+    limit = 300 + info.duration       # generous; a stuck ffmpeg must not hang the whole build
     for stream, kind, label, target in plan:
         out = dest_dir / f"{rec.stem}.a{stream + 1}.{kind}.m4a"
         meta = out.with_suffix(".json")
@@ -140,14 +143,18 @@ def split_tracks(rec: Path, info: media.MediaInfo, mic: int, dest_dir: Path, log
             stems.append(Stem(kind, label, out, old.get("gain", 0.0)))
             continue
         log(f"Levelling {label.lower()} audio from {rec.name} (track {stream + 1})")
-        lufs, peak = measure(rec, stream)
+        lufs, peak = measure(rec, stream, timeout=limit)
         gain = gain_for(lufs, peak, target, over=12.0 if kind in ("voice", "mix") else 0.0)
         af = f"volume={gain}dB"
         if kind in ("voice", "mix"):
             af += ",alimiter=limit=0.89:level=disabled"      # catch shouts after the boost
         proc = _ffmpeg(["ffmpeg", "-y", "-v", "error", "-i", str(rec), "-map", f"0:a:{stream}", "-vn",
-                        "-af", af, "-ar", "48000", "-c:a", "aac", "-b:a", "256k", str(out)])
+                        "-af", af, "-ar", "48000", "-c:a", "aac", "-b:a", "256k", str(out)], timeout=limit)
         if proc.returncode != 0:
+            out.unlink(missing_ok=True)
+            if kind == "game":       # the recording's own audio still carries track 1
+                log(f"Skipped levelling game audio from {rec.name} ({proc.stderr.strip()[-200:]})")
+                continue
             raise media.MediaError(f"Couldn't extract audio track {stream + 1} from {rec.name}: "
                                    f"{proc.stderr.strip()[-400:]}")
         meta.write_text(json.dumps({"sig": sig, "gain": gain, "lufs": lufs}), encoding="utf-8")
