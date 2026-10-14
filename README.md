@@ -65,8 +65,8 @@ for another round; earlier ones are never overwritten.
 It's a let's-play, so your talking is the content: the AI keeps the story, your stories and your
 reactions, and only cuts clear waste (mic checks, retakes, the same point twice, stray fragments,
 talk after the goodbye). There's no target length. It never cuts in the middle of a sentence; if it
-tries, KDcut puts the sentence back and says so in `review.md`. Short pauses stay in, and each line
-gets a second of gameplay after it so actions and reactions land.
+tries, KDcut puts the sentence back and says so in `review.md`. Pauses while you think of what to
+say next are cut for a snappy edit; the AI only keeps silent gameplay where something is happening.
 
 Item spins and mob pictures are used for "list" moments: when you announce the goal ("today I'm
 building an iron farm" gets the iron ingot and the text **IRON FARM**) or name things to come ("we'll
@@ -280,8 +280,8 @@ Defaults live in `src/kdcut/config.py`. Override them in `~/.kdcut/config.toml` 
 style_notes = "Keep the jokes and the chat interaction. Cut inventory sorting. Don't cut deaths."
 
 [edit]
-keep_pauses_up_to = 4.0   # longer silences are cut
-pad_after = 1.0           # breathing room after each sentence
+keep_pauses_up_to = 0.6   # longer pauses (thinking of what to say next) are cut
+pad_after = 0.3           # breathing room after each sentence
 
 [whisper]
 mic_track = 2

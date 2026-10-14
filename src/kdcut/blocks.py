@@ -36,6 +36,7 @@ class Block:
     text: str
     cue: str | None = None  # set when the block is a spoken cue
     flags: set[str] = field(default_factory=set)  # forced_drop, highlight, chapter
+    pauses: list[tuple[float, float]] = field(default_factory=list)  # long silences inside the block
 
     @property
     def duration(self) -> float:
@@ -190,6 +191,9 @@ def _move_dangling(src_blocks: list[Block], block_words: list[list[Word]], withi
             nws.insert(0, ws.pop())
             moved += 1
         if moved:
+            gap = (nws[moved - 1].end, nws[moved].start)
+            if gap[1] - gap[0] > 0.5:
+                n.pauses.insert(0, gap)       # "all ... right": the wait in between can be cut
             n.start, n.text = nws[0].start, " ".join(w.text for w in nws)
             if not ws:
                 del src_blocks[k], block_words[k]

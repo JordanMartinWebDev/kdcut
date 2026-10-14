@@ -94,18 +94,31 @@ def kept_ranges(blocks: list[Block], plan: Plan, durations: list[float], edit: d
                 continue
             prev_end = src_blocks[i - 1].end if i > 0 else 0.0
             nxt = src_blocks[i + 1] if i + 1 < len(src_blocks) else None
-            s = max(b.start - pad_b, prev_end, 0.0)
-            e = b.end + pad_a + plan.extend.get(b.id, 0.0)
-            if nxt is not None and ("forced_drop" in nxt.flags or nxt.id in plan.drop):
-                e = min(e, nxt.start)
-            e = min(e, limit)
-            if cur and s - cur.end <= max_pause:
-                cur.end = max(cur.end, e)
-                cur.block_ids.append(b.id)
-            else:
-                if cur:
-                    ranges.append(cur)
-                cur = Range(src, s, e, [b.id])
+            # A block can hold a long wait between words ("all ... right"); treat each side
+            # as its own piece so the wait is trimmed like any other pause.
+            cuts = [(a, z) for a, z in b.pauses if b.start < a < z < b.end]
+            pieces, at = [], b.start
+            for a, z in cuts:
+                pieces.append((at, a))
+                at = z
+            pieces.append((at, b.end))
+            for k, (p_start, p_end) in enumerate(pieces):
+                last = k == len(pieces) - 1
+                s = max(p_start - pad_b, prev_end if k == 0 else pieces[k - 1][1], 0.0)
+                e = p_end + pad_a + (plan.extend.get(b.id, 0.0) if last else 0.0)
+                if not last:
+                    e = min(e, pieces[k + 1][0])
+                elif nxt is not None and ("forced_drop" in nxt.flags or nxt.id in plan.drop):
+                    e = min(e, nxt.start)
+                e = min(e, limit)
+                if cur and s - cur.end <= max_pause:
+                    cur.end = max(cur.end, e)
+                    if k == 0:
+                        cur.block_ids.append(b.id)
+                else:
+                    if cur:
+                        ranges.append(cur)
+                    cur = Range(src, s, e, [b.id] if k == 0 else [])
         if cur:
             ranges.append(cur)
     return [r for r in ranges if r.end - r.start > 0.05]

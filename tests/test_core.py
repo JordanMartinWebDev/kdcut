@@ -276,3 +276,20 @@ class SentenceTests(unittest.TestCase):
         restored = protect_sentences(plan, bl)
         self.assertEqual(restored, ["B2"])
         self.assertEqual(set(plan.drop), {"B4"})
+
+
+class PauseTrimTests(unittest.TestCase):
+    def test_thinking_pauses_are_cut_even_inside_a_block(self):
+        from kdcut import config
+        from kdcut.blocks import build_blocks
+        from kdcut.planner import Plan
+        from kdcut.timeline import kept_ranges
+        from kdcut.transcribe import Word
+        words = [Word(0, 0.4, "okay"), Word(0.5, 0.9, "so."), Word(3.0, 3.4, "now"), Word(3.5, 3.9, "we"),
+                 Word(4.0, 4.4, "mine."), Word(5.0, 5.2, "all"), Word(11.0, 11.3, "right"), Word(11.4, 11.8, "go.")]
+        blocks = build_blocks([words])
+        ranges = kept_ranges(blocks, Plan(), [20.0], config.DEFAULTS["edit"])
+        kept = sum(r.end - r.start for r in ranges)
+        self.assertLess(kept, 5.5)                      # 2 s and 6 s waits are gone
+        self.assertTrue(any(r.start <= 5.0 < r.end for r in ranges))     # "all" kept
+        self.assertTrue(any(r.start <= 11.0 < r.end for r in ranges))    # "right go." kept

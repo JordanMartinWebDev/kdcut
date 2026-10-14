@@ -35,9 +35,9 @@ DEFAULTS: dict[str, Any] = {
         "mic_track": "auto",
     },
     "edit": {
-        "pad_before": 0.3,         # seconds kept before each spoken block
-        "pad_after": 1.0,          # seconds kept after each (lets an action or reaction land)
-        "keep_pauses_up_to": 4.0,  # pauses shorter than this stay in; longer ones get cut
+        "pad_before": 0.15,        # seconds kept before each spoken block
+        "pad_after": 0.3,          # seconds kept after each spoken block
+        "keep_pauses_up_to": 0.6,  # thinking pauses longer than this are cut (snappy jump cuts)
         "block_gap": 0.8,          # silence that splits speech into blocks
         "max_block_seconds": 20.0,
         "cold_open": True,         # start with a short teaser of the best moment
