@@ -150,7 +150,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     plan_file = out / "plan.json"
     reuse_plan = plan_file.is_file() and not replan and not retranscribe
     if reuse_plan and Plan.load(plan_file).blocks_key != planner.blocks_key(blocks):
-        r.log("The transcript was split differently since the last edit, so the AI edits it again")
+        r.log("The transcript or the editing rules changed since the last edit, so the AI edits it again")
         reuse_plan = False
     use_vision = use_ai and bool(video.get("vision", cfg.get("vision", {}).get("enabled", False)))
     notes: dict[str, list[str]] = {}

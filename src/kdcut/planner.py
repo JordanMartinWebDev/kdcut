@@ -32,9 +32,12 @@ class Plan:
         return cls(**{k: v for k, v in data.items() if k in known})
 
 
+RULES_VERSION = 3     # bump when the editing rules change, so saved plans are redone
+
+
 def blocks_key(blocks: list[Block]) -> str:
     import hashlib
-    sig = "|".join(f"{b.id}:{b.source}:{b.start:.2f}:{b.end:.2f}" for b in blocks)
+    sig = f"v{RULES_VERSION}|" + "|".join(f"{b.id}:{b.source}:{b.start:.2f}:{b.end:.2f}" for b in blocks)
     return hashlib.sha1(sig.encode("utf-8")).hexdigest()[:16]
 
 
