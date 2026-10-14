@@ -60,6 +60,22 @@ your logo and character) and saves it, so every later episode looks consistent. 
 corner is kept clear because YouTube puts the video length there. Click **New thumbnail ideas**
 for another round; earlier ones are never overwritten.
 
+## How the AI edits
+
+It's a let's-play, so your talking is the content: the AI keeps the story, your stories and your
+reactions, and only cuts clear waste (mic checks, retakes, the same point twice, stray fragments,
+talk after the goodbye). There's no target length. It never cuts in the middle of a sentence; if it
+tries, KDcut puts the sentence back and says so in `review.md`. Short pauses stay in, and each line
+gets a second of gameplay after it so actions and reactions land.
+
+Item spins and mob pictures are used for "list" moments: when you announce the goal ("today I'm
+building an iron farm" gets the iron ingot and the text **IRON FARM**) or name things to come ("we'll
+have to watch out for blazes and spiders"). Sound effects are kept to clear moments: punchlines,
+fails, scares, reveals.
+
+**Start with a teaser** puts a few seconds of the best moment first, in black and white with
+**COMING UP** in the corner, then a quick flash into the episode.
+
 ## Music
 
 Add background music in **Settings → Music**: pick one or more folders of music you're licensed
@@ -264,9 +280,8 @@ Defaults live in `src/kdcut/config.py`. Override them in `~/.kdcut/config.toml` 
 style_notes = "Keep the jokes and the chat interaction. Cut inventory sorting. Don't cut deaths."
 
 [edit]
-keep_pauses_up_to = 2.5   # longer silences are cut
-pad_after = 0.35          # breathing room after each sentence
-target_keep = "60-80%"
+keep_pauses_up_to = 4.0   # longer silences are cut
+pad_after = 1.0           # breathing room after each sentence
 
 [whisper]
 mic_track = 2

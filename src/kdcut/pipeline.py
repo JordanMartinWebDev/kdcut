@@ -18,7 +18,7 @@ import tomllib
 from pathlib import Path
 
 from kdcut import blocks as blocks_mod
-from kdcut import audioprep, captions, ducking, fcpxml, media, metadata, music, planner, transcribe, vision
+from kdcut import audioprep, captions, graphics, ducking, fcpxml, media, metadata, music, planner, transcribe, vision
 from kdcut.assets import AssetIndex
 from kdcut.blocks import fmt_ts
 from kdcut.planner import Plan
@@ -149,6 +149,9 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     broll = [(n, media.probe(p).duration or 5.0) for n, p in broll_by_name.items()]
     plan_file = out / "plan.json"
     reuse_plan = plan_file.is_file() and not replan and not retranscribe
+    if reuse_plan and Plan.load(plan_file).blocks_key != planner.blocks_key(blocks):
+        r.log("The transcript was split differently since the last edit, so the AI edits it again")
+        reuse_plan = False
     use_vision = use_ai and bool(video.get("vision", cfg.get("vision", {}).get("enabled", False)))
     notes: dict[str, list[str]] = {}
     if use_vision and not reuse_plan:
@@ -178,6 +181,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     else:
         r.step(2, "Quick edit (spoken cues and pauses only)")
         plan = planner.plan_without_ai(blocks)
+        plan.blocks_key = planner.blocks_key(blocks)
         plan.save(plan_file)
 
     # Packaging (titles, description, cold open) needs the whole kept story, so it is
@@ -259,6 +263,17 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     review: list[str] = []
     placed = {"broll": 0, "overlay": 0, "sfx": 0, "music": 0}
     teaser = tl.main[0] if tl.main and tl.main[0].role == "cold_open" else None
+    if teaser and video.get("teaser_style", True):
+        # Black and white with "COMING UP", so viewers know it's from later in the episode.
+        try:
+            r.check()
+            styled = graphics.render_teaser(teaser.path, tl.seconds(teaser.src_in), teaser.dur, tl.fps,
+                                            work / "teaser.mp4", width, height, log=r.log)
+            had_stems = bool(stems.get(str(teaser.path)))
+            teaser.path, teaser.src_in, teaser.name = styled, 0, "Cold open - coming up"
+            teaser.enable = "video" if had_stems else "all"
+        except media.MediaError as exc:
+            r.log(f"Kept the teaser plain (couldn't render the 'Coming up' look: {exc})")
     if teaser:
         cb = by_id[md.cold_open["id"]]
         tl.markers.append(Marker(rec=0, name="Cold open (teaser)", kind="note"))
@@ -299,18 +314,24 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         review.append(f"{fmt_ts(tl.seconds(rec))}  B-roll  {path.name}"
                       + (f"  ({item['reason']})" if item.get("reason") else ""))
 
-    if index:
-        for n, item in enumerate(plan.overlays):
-            rec = anchor(item["at"])
+    for n, item in enumerate(plan.overlays):
+        rec = anchor(item["at"])
+        if rec is None:
+            continue
+        label = str(item.get("text") or "").strip()
+        asset = None
+        if index:
             asset = index.best(item["query"], "overlay", salt=f"o{n}") or \
                 index.best(item["query"], "image", salt=f"o{n}")
-            if rec is None or asset is None:
-                review.append(f"  (no overlay matched '{item['query']}')")
-                continue
-            r.check()
+        if asset is None and not label:
+            review.append(f"  (no overlay matched '{item['query']}')")
+            continue
+        r.check()
+        want = float(item.get("duration", 3.0))
+        dur = min(tl.frames(want), tl.duration - rec)
+        if asset is not None:
             path, how = media.prepare_overlay(Path(asset.path), cache)
             info = media.probe(path)
-            want = float(item.get("duration", 3.0))
             secs = min(want, info.duration) if info.duration > 0 and not info.is_image else want
             dur = min(tl.frames(secs), tl.duration - rec)
             if dur <= 0:
@@ -322,6 +343,18 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             placed["overlay"] += 1
             review.append(f"{fmt_ts(tl.seconds(rec))}  Overlay '{item['query']}' -> {asset.name}"
                           + (f"  [{how}]" if how != "as-is" else ""))
+        if label and dur > 0:
+            try:
+                png = graphics.label_png(label, work / "labels" / f"label_{n + 1}.png", width, height)
+            except Exception as exc:  # a missing label never stops the build
+                r.log(f"Text label '{label}' skipped: {exc}")
+                continue
+            lane = lanes.place(int(tcfg["overlay_lane"]) + 1, rec, dur)
+            tl.connected.append(Clip(path=png, src_in=0, dur=dur, rec=rec, lane=lane, enable="video",
+                                     role="overlay", name=f"Text - {label}", is_image=True))
+            review.append(f"{fmt_ts(tl.seconds(rec))}  Text '{label}'")
+
+    if index:
 
         for n, item in enumerate(plan.sfx):
             rec = anchor(item["at"], at_end=item.get("when") == "end")

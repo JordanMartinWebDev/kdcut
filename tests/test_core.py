@@ -244,3 +244,35 @@ class WatchedRunTests(unittest.TestCase):
         self.assertIn("-nostdin", text)
         self.assertIn("exit -9", text)
         os.remove(fake)
+
+
+class SentenceTests(unittest.TestCase):
+    def test_dangling_words_join_the_next_block_and_cut_that_still_works(self):
+        from kdcut.blocks import build_blocks
+        from kdcut.transcribe import Word
+        words = [Word(0, 0.4, "of"), Word(0.5, 0.9, "course"), Word(1.0, 1.4, "it's"), Word(1.5, 1.9, "across"),
+                 Word(2.0, 2.4, "water"), Word(2.5, 2.7, "all"),
+                 Word(6.0, 6.4, "right"), Word(6.5, 6.9, "let's"), Word(7.0, 7.4, "go."),
+                 Word(10.0, 10.3, "i"), Word(10.4, 10.7, "could"),
+                 Word(12.0, 12.3, "cut"), Word(12.35, 12.6, "that"), Word(12.7, 12.8, "i"),
+                 Word(14.0, 14.4, "also"), Word(14.5, 14.9, "think.")]
+        blocks = build_blocks([words])
+        texts = [b.text for b in blocks]
+        self.assertEqual(texts[0], "of course it's across water")
+        self.assertEqual(texts[1], "all right let's go.")
+        self.assertIn("cut that", texts)
+        self.assertIn("i also think.", texts)
+        self.assertIn("forced_drop", next(b for b in blocks if b.text == "i could").flags)
+
+    def test_cuts_that_split_a_sentence_are_undone(self):
+        from kdcut.blocks import Block
+        from kdcut.planner import Plan, protect_sentences
+        bl = [Block("B1", 0, 0, 19.9, "I have no idea what season this is and I have difficulty"),
+              Block("B2", 0, 20.0, 39.0, "set too hard. My daughter is almost two."),
+              Block("B3", 0, 45.0, 50.0, "Anyway, that's the plan."),
+              Block("B4", 0, 52.0, 55.0, "um so yeah."),
+              Block("B5", 0, 60.0, 62.0, "Let's go.")]
+        plan = Plan(drop={"B2": "rambling", "B4": "filler"})
+        restored = protect_sentences(plan, bl)
+        self.assertEqual(restored, ["B2"])
+        self.assertEqual(set(plan.drop), {"B4"})

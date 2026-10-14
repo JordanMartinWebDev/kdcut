@@ -61,7 +61,7 @@ class FakeAI:
                 "extend": [{"id": "B0005", "seconds": 4}],
                 "broll": [{"file": "castle-walls-timelapse.mp4", "at": "B0005", "duration": 4,
                            "reason": "talks about finishing the walls"}],
-                "overlays": [{"at": "B0006", "query": "diamond pickaxe", "duration": 2}],
+                "overlays": [{"at": "B0006", "query": "diamond pickaxe", "duration": 2, "text": "Diamonds"}],
                 "sfx": [{"at": "B0006", "query": "level up", "when": "end"},
                         {"at": "B0003", "query": "ender dragon roar"}],
                 "chapters": [{"at": "B0002", "title": "Intro"},
@@ -229,7 +229,7 @@ class EndToEnd(unittest.TestCase):
                     start = secs(c.get("start"))
                     self.assertGreaterEqual(secs(child.get("offset")), start)
                     self.assertLess(secs(child.get("offset")), start + dur)
-                    self.assertIn(child.get("lane"), {"1", "2", "-1", "-2", "-3", "-4"})
+                    self.assertIn(child.get("lane"), {"1", "2", "3", "-1", "-2", "-3", "-4"})
         # Converted overlay is a ProRes MOV, not the original WebM.
         srcs = [m.get("src") for m in root.iter("media-rep")]
         self.assertTrue(any(s.endswith(".mov") for s in srcs))
@@ -266,7 +266,17 @@ class EndToEnd(unittest.TestCase):
         first = root.find(".//sequence/spine")[0]
         self.assertTrue(first.get("name").startswith("Cold open"))
         self.assertEqual(first.get("duration"), "240/60s")       # 4 seconds
-        self.assertEqual(first.get("start"), f"{round((25.0 - 0.15) * 60)}/60s")  # from the diamonds block
+        # Rendered black-and-white "coming up" clip; its audio still comes from the diamonds block.
+        self.assertEqual(first.get("start"), "0s")
+        voice = next(c for c in first if c.get("lane") == "-1")
+        self.assertEqual(voice.get("start"), f"{round((25.0 - 0.15) * 60)}/60s")
+        teaser = self.proj / "output" / ".work" / "teaser.mp4"
+        self.assertTrue(teaser.exists())
+        self.assertAlmostEqual(media.probe(teaser).duration, 4.0, delta=0.15)
+        sat = subprocess.run(["ffmpeg", "-v", "error", "-ss", "1", "-i", str(teaser), "-frames:v", "1",
+                              "-vf", "signalstats,metadata=print:key=lavfi.signalstats.SATAVG:file=-",
+                              "-f", "null", "-"], capture_output=True, text=True).stdout
+        self.assertLess(float(sat.split("SATAVG=")[1].split()[0]), 2.0)     # black and white
         self.assertIn("Cold open: 4s teaser", self.review)
         system_prompts = [c for c in self.ai.calls if c[0] == "submit_metadata"]
         self.assertIn("cold open", system_prompts[0][1])
@@ -315,6 +325,11 @@ class EndToEnd(unittest.TestCase):
         sfx = [e for e in root.iter("asset-clip") if e.get("lane") == "-4"]
         self.assertTrue(sfx)
         self.assertTrue(all(e.find("adjust-volume") is not None for e in sfx))
+
+    def test_text_label_with_overlay(self):
+        self.assertIn("Text 'Diamonds'", self.review)
+        root = ET.fromstring(self.xml.split("<!DOCTYPE fcpxml>", 1)[1])
+        self.assertTrue(any(e.get("name") == "Text - Diamonds" for e in root.iter("video")))
 
     def test_music_on_its_own_track(self):
         root = ET.fromstring(self.xml.split("<!DOCTYPE fcpxml>", 1)[1])

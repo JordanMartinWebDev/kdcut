@@ -1054,7 +1054,8 @@ class MainWindow(QMainWindow):
         self.use_ai = QCheckBox("AI edit (cuts, B-roll, sounds, overlays, titles)")
         self.use_ai.setChecked(True)
         self.cold_open = QCheckBox("Start with a teaser")
-        self.cold_open.setToolTip("Cold open: a few seconds of the best moment before the intro, to hook viewers.")
+        self.cold_open.setToolTip("Cold open: a few seconds of the best moment before the intro, in black and white "
+                                  "with 'COMING UP' on screen and a quick flash into the episode.")
         self.cold_open.setChecked(bool(config.load()["edit"].get("cold_open", True)))
         self.fresh = QCheckBox("Start over (redo transcription and AI edit)")
         self.fresh.setToolTip("Normally re-running keeps the transcript and the AI's decisions so it's fast.")
