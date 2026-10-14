@@ -138,7 +138,9 @@ capped at 120 frames per video and adds a little to the API cost.
    rambles), where to keep wordless gameplay, which B-roll goes where, which sound effects and
    overlays fit, and where chapters start.
 4. **Build the timeline**: frame-accurate cuts linked to your original files (nothing is re-rendered),
-   B-roll on V2, overlays on V3, SFX on A2, and chapter and highlight markers.
+   your voice on A1 and game audio on A2 (each pulled out of the recording and levelled, because
+   Resolve only imports a recording's first audio track), music on A3, sound effects below that at
+   a consistent loudness, B-roll on V2, overlays on V3, and chapter and highlight markers.
 5. **Write review notes and an upload kit**.
 
 Only transcript text goes to the AI. Your video never leaves your PC.

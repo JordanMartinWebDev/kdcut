@@ -147,7 +147,8 @@ RESOLVE_STEPS = (
     "2. File > Import > Timeline...\n"
     "3. Pick the .fcpxml file in this video's folder.\n"
     "4. If Resolve asks about settings, keep the timeline's settings.\n\n"
-    "B-roll is on track V2, overlays on V3, sound effects on A2, music on A4. Chapter markers are on the "
+    "Your voice is on A1 and game audio on A2, each levelled (a one-track recording is all on A1). "
+    "Music is on A3 and sound effects below it. B-roll is on V2, overlays on V3. Chapter markers are on the "
     "timeline. If there's a cold open, it's the first clip; delete it if you don't like it. "
     "Check review.md for what was cut."
 )

@@ -18,7 +18,7 @@ import tomllib
 from pathlib import Path
 
 from kdcut import blocks as blocks_mod
-from kdcut import captions, ducking, fcpxml, media, metadata, music, planner, transcribe, vision
+from kdcut import audioprep, captions, ducking, fcpxml, media, metadata, music, planner, transcribe, vision
 from kdcut.assets import AssetIndex
 from kdcut.blocks import fmt_ts
 from kdcut.planner import Plan
@@ -222,6 +222,33 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
                              durations, ed, prefix=prefix)
     lanes = _Lanes()
     tcfg = cfg["timeline"]
+
+    # Every audio track of the recordings, as its own levelled track under the video.
+    # (Resolve only imports a recording's first audio track, which loses a mic on track 2.)
+    stems: dict[str, list[audioprep.Stem]] = {}
+    for rec_path, info in zip(recordings, infos):
+        if not info.audio:
+            continue
+        try:
+            mic = media.pick_mic_track(info, cfg["whisper"].get("mic_track", "auto"))
+            stems[str(rec_path)] = audioprep.split_tracks(Path(rec_path), info, mic, work / "audio", log=r.log)
+        except media.MediaError as exc:
+            r.log(f"Kept the recording's own audio for {Path(rec_path).name}: {exc}")
+        r.check()
+    audio_lanes = 0
+    for clip in tl.main:
+        got = stems.get(str(clip.path))
+        if not got:
+            continue
+        clip.enable = "video"
+        for j, stem in enumerate(got):
+            lanes.busy.setdefault(-(j + 1), []).append((clip.rec, clip.rec_end))
+            tl.connected.append(Clip(path=stem.path, src_in=clip.src_in, dur=clip.dur, rec=clip.rec,
+                                     lane=-(j + 1), enable="audio", role=stem.kind,
+                                     name=f"{stem.label} - {clip.path.stem}"))
+        audio_lanes = max(audio_lanes, len(got))
+    music_lane = -(audio_lanes + 1)
+    sfx_lane = min(int(tcfg["sfx_lane"]), music_lane - 1)
     cache = Path(cfg["assets"]["cache_dir"]).expanduser() / "converted"
     review: list[str] = []
     placed = {"broll": 0, "overlay": 0, "sfx": 0, "music": 0}
@@ -238,7 +265,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
                 wdur = tl.frames(min(media.probe(Path(whoosh.path)).duration or 1.0, 3.0))
                 rec_w = max(teaser.rec_end - wdur // 2, 0)
                 tl.connected.append(Clip(path=Path(whoosh.path), src_in=0, dur=wdur, rec=rec_w,
-                                         lane=lanes.place(int(tcfg["sfx_lane"]), rec_w, wdur),
+                                         lane=lanes.place(sfx_lane, rec_w, wdur), volume_db=audioprep.sfx_gain(Path(whoosh.path)),
                                          enable="audio", role="sfx", name=whoosh.name))
                 placed["sfx"] += 1
 
@@ -300,9 +327,10 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             dur = min(tl.frames(min(info.duration or 1.0, 8.0)), tl.duration - rec)
             if dur <= 0:
                 continue
-            lane = lanes.place(int(tcfg["sfx_lane"]), rec, dur)
+            lane = lanes.place(sfx_lane, rec, dur)
             tl.connected.append(Clip(path=Path(asset.path), src_in=0, dur=dur, rec=rec,
-                                     lane=lane, enable="audio", role="sfx", name=asset.name))
+                                     lane=lane, enable="audio", role="sfx", name=asset.name,
+                                     volume_db=audioprep.sfx_gain(Path(asset.path))))
             placed["sfx"] += 1
             review.append(f"{fmt_ts(tl.seconds(rec))}  SFX '{item['query']}' -> {asset.name}")
     elif plan.overlays or plan.sfx:
@@ -364,7 +392,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         if bed is not None:
             rec = tl.frames(music_start)
             dur = tl.duration - rec
-            tl.connected.append(Clip(path=bed, src_in=0, dur=dur, rec=rec, lane=lanes.place(-3, rec, dur),
+            tl.connected.append(Clip(path=bed, src_in=0, dur=dur, rec=rec, lane=lanes.place(music_lane, rec, dur),
                                      enable="audio", role="music", name="Music (dips under voice)"))
         else:
             for pc in pieces:
@@ -373,7 +401,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
                 if dur <= tl.frames(2):
                     continue
                 tl.connected.append(Clip(path=Path(pc.track.path), src_in=tl.frames(pc.offset), dur=dur,
-                                         rec=rec, lane=lanes.place(-3, rec, dur), enable="audio",
+                                         rec=rec, lane=lanes.place(music_lane, rec, dur), enable="audio",
                                          role="music", name=pc.track.name, volume_db=vol))
         placed["music"] = len(pieces)
         music.record_use([pc.track.path for pc in pieces])

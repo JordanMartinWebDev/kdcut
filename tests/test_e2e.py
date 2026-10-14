@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 from fractions import Fraction
 from pathlib import Path
 
-from kdcut import config, media, transcribe
+from kdcut import audioprep, config, media, transcribe
 from kdcut.assets import AssetIndex
 from kdcut.pipeline import run
 from kdcut.transcribe import Word
@@ -229,7 +229,7 @@ class EndToEnd(unittest.TestCase):
                     start = secs(c.get("start"))
                     self.assertGreaterEqual(secs(child.get("offset")), start)
                     self.assertLess(secs(child.get("offset")), start + dur)
-                    self.assertIn(child.get("lane"), {"1", "2", "-1", "-3"})
+                    self.assertIn(child.get("lane"), {"1", "2", "-1", "-2", "-3", "-4"})
         # Converted overlay is a ProRes MOV, not the original WebM.
         srcs = [m.get("src") for m in root.iter("media-rep")]
         self.assertTrue(any(s.endswith(".mov") for s in srcs))
@@ -296,6 +296,25 @@ class EndToEnd(unittest.TestCase):
         prompt = next(c[1] for c in self.ai.calls if c[0] == "design_thumbnails")
         self.assertTrue(any(b.get("type") == "image" for b in prompt))
         self.assertIn("No style exists yet", prompt[0]["text"])
+
+    def test_voice_and_game_audio_on_their_own_tracks(self):
+        root = ET.fromstring(self.xml.split("<!DOCTYPE fcpxml>", 1)[1])
+        spine = list(root.find(".//sequence/spine"))
+        for main in spine:
+            self.assertEqual(main.get("srcEnable"), "video")
+            kids = {c.get("lane"): c for c in main if c.tag == "asset-clip"}
+            self.assertTrue(kids["-1"].get("name").startswith("Voice - "))
+            self.assertTrue(kids["-2"].get("name").startswith("Game - "))
+            for lane in ("-1", "-2"):
+                self.assertEqual(kids[lane].get("offset"), main.get("start"))
+                self.assertEqual(kids[lane].get("duration"), main.get("duration"))
+        voice = sorted((self.proj / "output" / ".work" / "audio").glob("*.voice.m4a"))
+        self.assertEqual(len(voice), 2)
+        lufs, _ = audioprep.measure(voice[0])
+        self.assertAlmostEqual(lufs, audioprep.VOICE_LUFS, delta=2.5)
+        sfx = [e for e in root.iter("asset-clip") if e.get("lane") == "-4"]
+        self.assertTrue(sfx)
+        self.assertTrue(all(e.find("adjust-volume") is not None for e in sfx))
 
     def test_music_on_its_own_track(self):
         root = ET.fromstring(self.xml.split("<!DOCTYPE fcpxml>", 1)[1])
