@@ -217,7 +217,7 @@ class DropList(QListWidget):
             rejected = self.add_paths([u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()])
             event.acceptProposedAction()
             if rejected:
-                QMessageBox.information(self, APP_NAME, "These aren't video files, so they were skipped:\n\n"
+                QMessageBox.information(self, APP_NAME, "These files can't go in this box, so they were skipped:\n\n"
                                         + "\n".join(p.name for p in rejected[:10]))
         else:
             super().dropEvent(event)
@@ -1040,15 +1040,31 @@ class MainWindow(QMainWindow):
                              "Drag your OBS recordings here\n(one or several sessions, in the order you recorded them)",
                              sort_on_add=True)
         self.broll = DropList(appcore.BROLL_EXTS,
-                              "Optional: drag Flashback renders, timelapses or screenshots here",
+                              "Optional: clips or screenshots to show over the gameplay while you talk",
                               sort_on_add=False)
+        self.timelapses = DropList(appcore.TIMELAPSE_EXTS,
+                                   "Optional: silent timelapses, plus voiceover audio to play over them",
+                                   sort_on_add=False)
+        self.timelapses.setToolTip(
+            "Each timelapse plays as its own scene, right after you start that build in the video, then "
+            "cuts back to the gameplay. Drop your voiceover audio here too: name it like its timelapse "
+            "(House.mp4 + House.m4a) or let the AI match them by what you say.")
+        self.broll.setMinimumHeight(90)
+        self.timelapses.setMinimumHeight(90)
         lists = QHBoxLayout()
         lists.setSpacing(16)
         lists.addWidget(drop_section("Recordings", "Drag to reorder. Delete key removes.", self.recs,
                                      vid_filter, self), 3)
-        lists.addWidget(drop_section("B-roll", "Name files after what they show, e.g. "
-                                     "castle-walls-timelapse.mp4", self.broll,
-                                     vid_filter[:-1] + " *.png *.jpg)", self), 2)
+        middle = QVBoxLayout()
+        middle.setSpacing(10)
+        middle.addWidget(drop_section("B-roll", "Shown on top while you keep talking. Name files after "
+                                      "what they show.", self.broll,
+                                      vid_filter[:-1] + " *.png *.jpg)", self), 1)
+        middle.addWidget(drop_section("Timelapses", "Play as their own scene. Add voiceover audio "
+                                      "(same name as the timelapse, or the AI matches it).", self.timelapses,
+                                      "Timelapses and voiceovers (*.mkv *.mp4 *.mov *.webm *.m4v *.avi "
+                                      "*.wav *.mp3 *.m4a *.flac *.ogg *.aac)", self), 1)
+        lists.addLayout(middle, 2)
         self.shots = DropList(appcore.SCREENSHOT_EXTS,
                               "Drag in-game screenshots for the thumbnail here (up to 5; 3+ allows a collage)",
                               sort_on_add=False)
@@ -1057,7 +1073,7 @@ class MainWindow(QMainWindow):
         v.addLayout(lists, 1)
 
         opts = QHBoxLayout()
-        self.use_ai = QCheckBox("AI edit (cuts, B-roll, sounds, overlays, titles)")
+        self.use_ai = QCheckBox("AI edit (cuts, B-roll, timelapses, sounds, titles)")
         self.use_ai.setChecked(True)
         self.cold_open = QCheckBox("Start with a teaser")
         self.cold_open.setToolTip("Cold open: a few seconds of the best moment before the intro, in black and white "
@@ -1200,6 +1216,7 @@ class MainWindow(QMainWindow):
         return appcore.Project(name=self.name.text().strip(), topic=self.topic.text().strip(),
                                recordings=[str(p) for p in self.recs.paths()],
                                broll=[str(p) for p in self.broll.paths()],
+                               timelapses=[str(p) for p in self.timelapses.paths()],
                                series=self.series.currentText().strip(), episode=self.episode.text().strip(),
                                screenshots=[str(p) for p in self.shots.paths()[:5]])
 
@@ -1235,6 +1252,7 @@ class MainWindow(QMainWindow):
         self.topic.setText(p.topic)
         self.recs.set_paths([Path(x) for x in p.recordings])
         self.broll.set_paths([Path(x) for x in p.broll])
+        self.timelapses.set_paths([Path(x) for x in p.timelapses])
         self.series.setCurrentText(p.series)
         self.episode.setText(p.episode)
         self.shots.set_paths([Path(x) for x in p.screenshots])
@@ -1244,6 +1262,7 @@ class MainWindow(QMainWindow):
         self.topic.clear()
         self.recs.set_paths([])
         self.broll.set_paths([])
+        self.timelapses.set_paths([])
         self.shots.set_paths([])
         try:  # next episode of the same series is the common case
             self.episode.setText(str(int(self.episode.text()) + 1))
@@ -1290,6 +1309,7 @@ class MainWindow(QMainWindow):
             return pipeline.run(out, cfg, use_ai=use_ai, retranscribe=fresh, replan=fresh,
                                 recordings=[Path(r) for r in proj.recordings],
                                 broll_files=[Path(b) for b in proj.broll], video=video,
+                                timelapse_files=[Path(t) for t in proj.timelapses],
                                 out_dir=out, reporter=reporter)
 
         run_in_thread(self.bridge, work, self.stop)

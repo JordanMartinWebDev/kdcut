@@ -41,6 +41,7 @@ DEFAULTS: dict[str, Any] = {
         "block_gap": 0.8,          # silence that splits speech into blocks
         "max_block_seconds": 20.0,
         "cold_open": True,         # start with a short teaser of the best moment
+        "timelapse_transition": "dip",   # dip: quick fade through black into and out of a timelapse | cut
         "overlays": False,         # AI-placed item spins / text labels (off: you add graphics yourself)
         "end_screen": True,        # add an end screen laid out for YouTube's end screen elements
         "end_screen_seconds": 20,  # YouTube allows 5-20 s

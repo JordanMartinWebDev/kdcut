@@ -6,7 +6,8 @@ Command-line project folder layout (created by `kdcut init`):
 
     MyEpisode/
       recordings/   raw OBS sessions, in recording order (MKV or MP4)
-      broll/        Flashback renders, timelapses... name them descriptively
+      broll/        Flashback renders shown over the gameplay while you talk
+      timelapses/   silent timelapses that play as their own scene, plus voiceover audio
       kdcut.toml    optional per-video settings (topic, series, style notes)
       output/       everything kdcut produces
 """
@@ -19,6 +20,7 @@ from pathlib import Path
 
 from kdcut import blocks as blocks_mod
 from kdcut import audioprep, captions, graphics, vad, ducking, fcpxml, media, metadata, music, planner, transcribe, vision
+from kdcut import timelapse as timelapse_mod
 from kdcut.assets import AssetIndex
 from kdcut.blocks import fmt_ts
 from kdcut.planner import Plan
@@ -69,11 +71,13 @@ class Reporter:
 def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = False,
         replan: bool = False, caller=None, *, recordings: list[Path] | None = None,
         broll_files: list[Path] | None = None, video: dict | None = None,
-        out_dir: Path | None = None, reporter: Reporter | None = None) -> dict:
+        out_dir: Path | None = None, reporter: Reporter | None = None,
+        timelapse_files: list[Path] | None = None) -> dict:
     """Edit one video.
 
     Command line: pass just `project` (folder with recordings/ and broll/).
-    Desktop app: pass explicit `recordings`, `broll_files`, `video` and `out_dir`.
+    Desktop app: pass explicit `recordings`, `broll_files`, `timelapse_files`, `video` and `out_dir`.
+    `timelapse_files` mixes timelapse videos and voiceover audio.
     """
     r = reporter or Reporter()
     project = Path(project).resolve()
@@ -114,6 +118,21 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         words.append(transcribe.transcribe_file(rec, cfg, work, force=retranscribe,
                                                 on_progress=on_progress, log=r.log))
         done_secs += info.duration
+    # Timelapses and their voiceovers.
+    if timelapse_files is None:
+        timelapse_files = media.list_media(project / "timelapses", media.VIDEO_EXTS | media.AUDIO_EXTS)
+    tl_videos, tl_audio = timelapse_mod.split_files([Path(p) for p in timelapse_files if Path(p).exists()])
+    timelapses = [timelapse_mod.Timelapse(p, media.probe(p).duration or 5.0) for p in tl_videos]
+    loose_vo = timelapse_mod.pair_by_name(timelapses, tl_audio)
+    vo_words: dict[str, list] = {}
+    for vo in [t.voiceover for t in timelapses if t.voiceover] + loose_vo:
+        r.check()
+        vo_words[str(vo)] = transcribe.transcribe_file(vo, cfg, work, force=retranscribe, log=r.log)
+    for t in timelapses:
+        if t.voiceover:
+            t.vo_words = vo_words[str(t.voiceover)]
+    if timelapses:
+        r.log(f"{len(timelapses)} timelapse(s), {len(tl_audio)} voiceover(s)")
     ed = cfg["edit"]
     blocks = blocks_mod.build_blocks(words, gap=float(ed["block_gap"]),
                                      max_seconds=float(ed["max_block_seconds"]))
@@ -233,12 +252,56 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         md.cold_open, prefix, teaser_level, teaser_note = _pick_cold_open(
             md, by_id, kept_ids, recordings, words, durations, voices, log=r.log)
 
+    # Where the timelapses go (decided on the finished story, cached like the packaging).
+    tl_inserts: dict[str, list] = {}
+    tl_notes: list[str] = []
+    if timelapses:
+        kept_blocks = [by_id[i] for i in kept_ids]
+        loose_text = [(p.name, " ".join(w.text.strip() for w in vo_words[str(p)])) for p in loose_vo]
+        if use_ai:
+            tl_file = out / "timelapses.json"
+            key = timelapse_mod.cache_key(kept_blocks, timelapses, loose_text)
+            saved = json.loads(tl_file.read_text(encoding="utf-8")) if tl_file.is_file() else {}
+            placements = saved.get("placements") if saved.get("key") == key else None
+            if placements is None:
+                r.log("Finding the spot for each timelapse")
+                try:
+                    placements = timelapse_mod.place(cfg, video, kept_blocks, timelapses, loose_text, call)
+                    tl_file.write_text(json.dumps({"key": key, "placements": placements}, indent=2,
+                                                  ensure_ascii=False), encoding="utf-8")
+                except Exception as exc:
+                    r.log(f"Couldn't place the timelapses with the AI ({exc}); they go at the end")
+                    placements = []
+            tl_inserts, tl_notes = timelapse_mod.resolve(placements, timelapses, loose_vo, set(kept_ids))
+        else:
+            tl_inserts, tl_notes = timelapse_mod.place_without_ai(timelapses, loose_vo)
+        for t in timelapses:          # voiceovers the AI (or the order) matched
+            if t.voiceover is not None and not t.vo_words:
+                t.vo_words = vo_words.get(str(t.voiceover), [])
+
     # 4. Timeline -------------------------------------------------------------------
     r.check()
     r.step(3, "Building timeline")
     name = video.get("title") or project.name
+    prepared: dict[int, timelapse_mod.Prepared] = {}     # id(clip) -> prepared timelapse
+    insert_clips: dict[str, list[Clip]] = {}
+    n_tl = 0
+    for after, items in tl_inserts.items():
+        for item in items:
+            n_tl += 1
+            r.check()
+            try:
+                prep = timelapse_mod.prepare(item, n_tl, fps, width, height, ed, work, log=r.log)
+            except media.MediaError as exc:
+                r.log(f"Timelapse {item.name} skipped: {exc}")
+                tl_notes.append(f"{item.name} couldn't be prepared ({exc})")
+                continue
+            clip = Clip(path=prep.file, src_in=0, dur=prep.frames, rec=0, role="timelapse",
+                        name=f"Timelapse - {item.path.stem}")
+            prepared[id(clip)] = prep
+            insert_clips.setdefault(after, []).append(clip)
     tl, starts, ends = build(name, recordings, blocks, plan, fps, width, height,
-                             durations, ed, prefix=prefix, voices=voices)
+                             durations, ed, prefix=prefix, voices=voices, inserts=insert_clips)
     lanes = _Lanes()
     tcfg = cfg["timeline"]
 
@@ -268,11 +331,35 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
                                      lane=-(j + 1), enable="audio", role=stem.kind,
                                      name=f"{stem.label} - {clip.path.stem}"))
         audio_lanes = max(audio_lanes, len(got))
+    # Voiceovers on the voice track, under their timelapse.
+    vo_spans: list[tuple[float, float]] = []
+    vo_caption_words: dict[str, list] = {}
+    for clip in tl.main:
+        prep = prepared.get(id(clip))
+        if prep is None or prep.voice_file is None:
+            continue
+        for src_in, dur, offset in prep.pieces:
+            rec = clip.rec + offset
+            tl.connected.append(Clip(path=prep.voice_file, src_in=src_in, dur=dur, rec=rec,
+                                     lane=lanes.place(-1, rec, dur), enable="audio", role="voiceover",
+                                     name=f"Voiceover - {prep.item.voiceover.stem}"))
+            vo_spans.append((tl.seconds(rec), tl.seconds(rec + dur)))
+        vo_caption_words[str(prep.voice_file)] = prep.item.vo_words
+        audio_lanes = max(audio_lanes, 1)
     music_lane = -(audio_lanes + 1)
     sfx_lane = min(int(tcfg["sfx_lane"]), music_lane - 1)
     cache = Path(cfg["assets"]["cache_dir"]).expanduser() / "converted"
     review: list[str] = []
-    placed = {"broll": 0, "overlay": 0, "sfx": 0, "music": 0}
+    placed = {"broll": 0, "overlay": 0, "sfx": 0, "music": 0, "timelapse": 0}
+    for clip in tl.main:
+        prep = prepared.get(id(clip))
+        if prep is None:
+            continue
+        placed["timelapse"] += 1
+        tl.markers.append(Marker(rec=clip.rec, name=f"Timelapse: {prep.item.name}", kind="note"))
+        review.append(timelapse_mod.review_line(tl.seconds(clip.rec), tl.seconds(clip.dur), prep,
+                                                prep.item.reason))
+    review += [f"  ({n})" for n in tl_notes]
     teaser = tl.main[0] if tl.main and tl.main[0].role == "cold_open" else None
     if teaser and video.get("teaser_style", True):
         # Black and white with "COMING UP", so viewers know it's from later in the episode.
@@ -456,7 +543,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         bed = None
         if pieces and mcfg.get("duck", True):
             # One pre-mixed music bed that dips under your voice.
-            speech = [(tl.seconds(starts[b]), tl.seconds(ends[b])) for b in starts]
+            speech = [(tl.seconds(starts[b]), tl.seconds(ends[b])) for b in starts] + vo_spans
             gains = ducking.envelope(speech, total, talk_db=talk_db, gap_db=gap_db)
             try:
                 r.log("Mixing the music so it dips while you talk")
@@ -485,7 +572,8 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     stem = _safe(name)
     xml_path = fcpxml.write(tl, out / f"{stem}.fcpxml", event=cfg["channel"].get("name") or "kdcut")
     (out / "captions.srt").write_text(
-        captions.to_srt(captions.words_on_timeline(words, recordings, tl)), encoding="utf-8")
+        captions.to_srt(captions.words_on_timeline(words, recordings, tl, extra=vo_caption_words)),
+        encoding="utf-8")
 
     # 5. Review notes + upload kit ----------------------------------------------------
     r.step(4, "Writing notes")
@@ -505,7 +593,8 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         f"- Raw footage: {fmt_ts(raw_total)}  ->  edit: {fmt_ts(final)} "
         f"({100 * final / raw_total:.0f}% kept)" if raw_total else "",
         f"- Clips on the main track: {len(tl.main)}",
-        f"- Placed: {placed['broll']} B-roll, {placed['overlay']} overlays, {placed['sfx']} sound effects",
+        f"- Placed: {placed['timelapse']} timelapses, {placed['broll']} B-roll, {placed['overlay']} overlays, "
+        f"{placed['sfx']} sound effects",
         f"- Timeline: `{xml_path.name}` ({float(fps):.2f} fps, {width}x{height})", "",
         "## How to open it",
         "DaVinci Resolve > File > Import > Timeline... > pick the .fcpxml. "

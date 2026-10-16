@@ -31,14 +31,15 @@ def cmd_setup(args) -> int:
 
 def cmd_init(args) -> int:
     p = Path(args.folder)
-    for sub in ("recordings", "broll", "output"):
+    for sub in ("recordings", "broll", "timelapses", "output"):
         (p / sub).mkdir(parents=True, exist_ok=True)
     toml = p / "kdcut.toml"
     if not toml.exists():
         toml.write_text(config.PROJECT_TEMPLATE, encoding="utf-8")
     print(f"Created {p.resolve()}")
     print("  1. Put your OBS recordings in recordings/ (they're edited in filename order)")
-    print("  2. Put Flashback renders / timelapses in broll/ with descriptive names")
+    print("  2. Optional: Flashback renders to show while you talk go in broll/; silent timelapses that")
+    print("     play as their own scene go in timelapses/, with any voiceover audio for them")
     print("  3. Fill in the topic in kdcut.toml, then run:  kdcut build \"" + str(p) + "\"")
     return 0
 

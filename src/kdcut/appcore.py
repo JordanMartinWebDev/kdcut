@@ -14,6 +14,7 @@ from kdcut import media
 
 RECORDING_EXTS = media.VIDEO_EXTS
 BROLL_EXTS = media.VIDEO_EXTS | media.IMAGE_EXTS
+TIMELAPSE_EXTS = media.VIDEO_EXTS | media.AUDIO_EXTS
 SCREENSHOT_EXTS = media.IMAGE_EXTS
 
 
@@ -59,6 +60,7 @@ class Project:
     topic: str = ""
     recordings: list[str] = field(default_factory=list)
     broll: list[str] = field(default_factory=list)
+    timelapses: list[str] = field(default_factory=list)   # timelapse videos + voiceover audio
     series: str = ""
     episode: str = ""
     screenshots: list[str] = field(default_factory=list)
@@ -85,7 +87,7 @@ def validate(project: Project) -> list[str]:
         problems.append("Give the video a name (it becomes the folder and timeline name).")
     if not project.recordings:
         problems.append("Drag at least one recording into the Recordings box.")
-    missing = [r for r in project.recordings + project.broll if not Path(r).exists()]
+    missing = [r for r in project.recordings + project.broll + project.timelapses if not Path(r).exists()]
     if missing:
         problems.append("These files can't be found anymore:\n" + "\n".join(missing[:5]))
     return problems
@@ -138,7 +140,8 @@ def summary_text(result: dict) -> str:
     raw, final = result["raw_seconds"], result["final_seconds"]
     pct = f" ({100 * final / raw:.0f}% kept)" if raw else ""
     return (f"{fmt_ts(raw)} of footage became a {fmt_ts(final)} video{pct}.\n"
-            f"Added {p['broll']} B-roll clip(s), {p['overlay']} overlay(s), "
+            + (f"Added {p['timelapse']} timelapse(s), " if p.get("timelapse") else "Added ")
+            + f"{p['broll']} B-roll clip(s), {p['overlay']} overlay(s), "
             f"{p['sfx']} sound effect(s) and {p.get('music', 0)} music track(s).")
 
 
@@ -148,6 +151,7 @@ RESOLVE_STEPS = (
     "3. Pick the .fcpxml file in this video's folder.\n"
     "4. If Resolve asks about settings, keep the timeline's settings.\n\n"
     "Your voice is on A1 and game audio on A2, each levelled (a one-track recording is all on A1). "
+    "Voiceovers for timelapses are on A1 too, under their timelapse. "
     "Music is on A3 and sound effects below it. B-roll is on V2, overlays on V3. Chapter markers are on the "
     "timeline. If there's a cold open, it's the first clip; delete it if you don't like it. "
     "Check review.md for what was cut."

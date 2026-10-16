@@ -16,11 +16,18 @@ class TWord:
     text: str
 
 
-def words_on_timeline(per_source: list[list[Word]], recordings: list[Path], timeline) -> list[TWord]:
-    """Map the transcript onto the edited timeline (only words that survived the edit)."""
+def words_on_timeline(per_source: list[list[Word]], recordings: list[Path], timeline,
+                      extra: dict[str, list[Word]] | None = None) -> list[TWord]:
+    """Map the transcript onto the edited timeline (only words that survived the edit).
+    `extra` adds words of connected audio clips (voiceovers): file path -> words."""
     index = {str(p): i for i, p in enumerate(recordings)}
+    per_source = list(per_source)
+    for path, ws in (extra or {}).items():
+        index[str(path)] = len(per_source)
+        per_source.append(ws)
+    extra_clips = [c for c in timeline.connected if str(c.path) in (extra or {})]
     out: list[TWord] = []
-    for clip in timeline.main:
+    for clip in [*timeline.main, *extra_clips]:
         src = index.get(str(clip.path))
         if src is None:
             continue
@@ -31,6 +38,7 @@ def words_on_timeline(per_source: list[list[Word]], recordings: list[Path], time
             mid = (w.start + w.end) / 2
             if a <= mid < b:
                 out.append(TWord(base + max(w.start, a) - a, base + min(w.end, b) - a, w.text))
+    out.sort(key=lambda w: w.start)
     return out
 
 
