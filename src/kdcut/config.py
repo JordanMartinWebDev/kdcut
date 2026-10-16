@@ -45,6 +45,7 @@ DEFAULTS: dict[str, Any] = {
         "overlays": False,         # AI-placed item spins / text labels (off: you add graphics yourself)
         "end_screen": True,        # add an end screen laid out for YouTube's end screen elements
         "end_screen_seconds": 20,  # YouTube allows 5-20 s
+        "end_screen_motion": True, # animate it (soft blend in, boxes pop in, gentle motion) instead of a still
         "end_screen_pose": "point_side",   # pose from your characters folder
         "end_screen_labels": ["WATCH NEXT", "MORE {series}"],
     },
