@@ -29,7 +29,7 @@ class ThumbnailTests(unittest.TestCase):
         self.logo = self.tmp / "logo.png"
         Image.new("RGBA", (800, 200), (255, 230, 0, 255)).save(self.logo)
         self.cfg = config._merge(config.DEFAULTS, {"thumbnails": {
-            "characters_dir": str(chars), "themes_dir": str(self.tmp / "themes")}})
+            "style": "classic", "characters_dir": str(chars), "themes_dir": str(self.tmp / "themes")}})
 
     def test_text_goes_on_the_quiet_side(self):
         with Image.open(self.shot) as im:
@@ -100,7 +100,7 @@ class PoseLibraryTests(unittest.TestCase):
         pose.save(self.chars / "shocked.png")
         Image.new("RGBA", (10, 10), (0, 0, 0, 255)).save(self.chars / "_preview.png")
         self.cfg = config._merge(config.DEFAULTS, {"thumbnails": {
-            "characters_dir": str(self.chars), "themes_dir": str(self.tmp / "themes")}})
+            "style": "classic", "characters_dir": str(self.chars), "themes_dir": str(self.tmp / "themes")}})
 
     def write_library(self, data):
         import json
