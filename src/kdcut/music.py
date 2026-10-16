@@ -49,6 +49,58 @@ class Track:
         return set(re.findall(r"[a-z]+", text.lower()))
 
 
+# --------------------------------------------------------------------------------------
+# Feel: what a track sounds like, from its tags, so the edit can't pick a funeral song
+# --------------------------------------------------------------------------------------
+
+SOMBER = {"sad", "sentimental", "melancholic", "melancholy", "romantic", "sexy", "lullabies", "lullaby",
+          "gospel", "worship", "praise", "funeral", "lament", "grief", "mournful", "requiem", "tragic"}
+# Fine for the right moment, wrong anywhere else: scary (the deep dark, being hunted) and
+# heavy/aggressive (big fights, chases). Offered to the AI as a separate list.
+SCARY = {"dark", "mysterious", "weird", "eerie", "horror", "suspense", "scary", "tense", "creepy",
+         "thriller", "sinister", "ominous", "drone", "heavy", "ponderous", "angry", "aggressive"}
+SPECIAL_BEATS = {"danger", "setback"}       # outline beats where the special list may play
+VIBES = {
+    "upbeat": {2, 3},      # happy / adventurous / upbeat, medium-high energy (the default)
+    "chill": {1, 2, 3},    # laid back is fine, still nothing sad
+}
+
+
+def feel(t: "Track") -> str:
+    """'somber', 'scary' or 'bright', from the track's mood/genre/energy tags and folders."""
+    w = t.words
+    if w & SOMBER:
+        return "somber"
+    if w & SCARY:
+        return "scary"
+    return "bright"
+
+
+def tagged(t: "Track") -> bool:
+    return bool(t.mood or t.energy or t.genre or t.tags)
+
+
+def energy_level(t: "Track") -> int | None:
+    return {"low": 1, "medium": 2, "high": 3}.get((t.energy or "").strip().lower())
+
+
+def for_vibe(library: list["Track"], vibe: str = "upbeat") -> tuple[list["Track"], list["Track"]]:
+    """(tracks offered for the episode, tracks only for genuinely scary moments)."""
+    if vibe == "any":
+        return [t for t in library if feel(t) != "scary"], [t for t in library if feel(t) == "scary"]
+    levels = VIBES.get(vibe, VIBES["upbeat"])
+    offered, scary = [], []
+    for t in library:
+        f, e = feel(t), energy_level(t)
+        if f == "somber":
+            continue
+        if f == "scary":
+            scary.append(t)
+        elif e is None or e in levels:
+            offered.append(t)
+    return offered, scary
+
+
 INDEX_VERSION = 2
 
 
@@ -199,7 +251,7 @@ def library_text(tracks: list[Track], history: dict[str, float], limit: int = 15
     """What the AI sees: one line per track, recently used ones marked."""
     week = time.time() - 7 * 86400
     lines = []
-    for t in tracks[:limit]:
+    for t in sorted(tracks, key=lambda x: not tagged(x))[:limit]:     # untagged last
         about = [", ".join(t.tags)] if t.tags else []
         if t.mood:
             about.append(t.mood)
@@ -209,7 +261,7 @@ def library_text(tracks: list[Track], history: dict[str, float], limit: int = 15
             about.append(t.genre)
         if t.bpm:
             about.append(f"{t.bpm} bpm")
-        desc = f" [{'; '.join(about)}]" if about else ""
+        desc = f" [{'; '.join(about)}]" if about else " [no mood tags]"
         recent = " (used recently)" if history.get(t.path, 0) > week else ""
         lines.append(f"- {t.name}{desc} {int(t.duration // 60)}:{int(t.duration % 60):02d}{recent}")
     return "\n".join(lines)
@@ -287,6 +339,31 @@ def tidy_cues(raw: list[tuple], speech: list[tuple[float, float]], start: float,
     return out
 
 
+def guard_special(cues: list[tuple], offered: list[Track], special: list[Track], ok_at, history: dict,
+                  backups: dict[int, list[Track]] | None = None) -> tuple[list[tuple], list[str]]:
+    """Scary/heavy tracks only where the story is dangerous: `ok_at(seconds)` says whether a
+    cue at that time may use them. Anything else is swapped for its backup or the closest
+    everyday track. Returns (cues, notes for the review)."""
+    special_paths = {t.path for t in special}
+    week = time.time() - 7 * 86400
+    used = {t.path for _, tracks, _ in cues for t in tracks[:1]}
+    out, notes = [], []
+    for k, (t, tracks, why) in enumerate(cues):
+        if tracks and tracks[0].path in special_paths and not ok_at(t):
+            keep = [x for x in tracks[1:] if x.path not in special_paths]
+            if not keep:
+                pool = [x for x in offered if x.path not in used] or offered
+                fresh = [x for x in pool if history.get(x.path, 0) < week] or pool
+                keep = _similar(tracks[0], fresh)[:1] if fresh else []
+            if keep:
+                notes.append(f"Swapped {tracks[0].name} (kept for scary or big moments) for {keep[0].name}: "
+                             "nothing dangerous happens there")
+                used.add(keep[0].path)
+                tracks = keep
+        out.append((t, tracks, why))
+    return out, notes
+
+
 def fill(cues: list[Cue], library: list[Track], history: dict[str, float],
          seed: int = 0, min_piece: float = 8.0) -> list[Placement]:
     """Turn cues into concrete clips. A section longer than its track continues with a
@@ -298,6 +375,7 @@ def fill(cues: list[Cue], library: list[Track], history: dict[str, float],
     for cue in cues:
         if not cue.tracks:
             continue
+        mood = feel(cue.tracks[0])
         t, prev = cue.start, None
         queue = list(cue.tracks)
         distinct = len({x.path for x in library} | {x.path for x in cue.tracks})
@@ -305,8 +383,10 @@ def fill(cues: list[Cue], library: list[Track], history: dict[str, float],
         while cue.end - t >= min_piece and guard < 200:
             guard += 1
             if not queue:
-                pool = [x for x in library if x.path not in used and (prev is None or x.path != prev.path)]
-                fresh = [x for x in pool if history.get(x.path, 0) < week] or pool or library
+                pool = [x for x in library if x.path not in used and (prev is None or x.path != prev.path)
+                        and feel(x) == mood]
+                same = [x for x in library if feel(x) == mood]
+                fresh = [x for x in pool if history.get(x.path, 0) < week] or pool or same or library
                 ranked = _similar(prev or cue.tracks[0], fresh)[:5]
                 queue = [rng.choice(ranked)] if ranked else []
                 if not queue:
@@ -336,13 +416,20 @@ SCHEMA_PART = {
 }
 
 RULES = (
-    "Pick background music from the creator's library. Match the mood of each part of the video: "
+    "Pick background music from the creator's library. This channel's sound is happy, adventurous "
+    "and upbeat: fun and positive, medium to high energy, never over the top and never somber. "
+    "Calm stretches get light, bright music (laid back but cheerful), not slow or sad songs. Keep "
+    "the energy close between neighbouring sections: never drop from an upbeat song straight into "
+    "a slow, heavy one. "
+    "Match the mood of each part of the video: "
     "calm/cozy for building and farming; adventurous or curious for exploring, travelling and "
     "ordinary caving and mining (looking for a cave, strip mining, finding ores is an adventure, "
     "not a horror film); upbeat for the intro; playful for funny moments; action for fights and "
-    "escapes. Keep dark, eerie, horror or 'scary' tracks for places that really are frightening: "
-    "the deep dark and ancient cities, being hunted at night, very low health, the dangerous "
-    "Nether. Judge by the title, artist and tags. "
+    "escapes. Tracks in the 'scary moments only' list are for places that really are "
+    "frightening: the deep dark and ancient cities, being hunted at night, very low health, the "
+    "dangerous Nether, big fights and chases. Never use them anywhere else. Judge tracks by their "
+    "mood, energy and genre; tracks marked [no mood tags] are unknown, so use them only when "
+    "nothing tagged fits. "
     "Change music when the mood changes, usually at chapter boundaries, and let each song play at "
     "least a couple of minutes; never change in the first minute after the intro. Leave music "
     "out where silence is stronger (a scary moment, a big reveal, an emotional beat). Avoid "

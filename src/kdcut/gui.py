@@ -421,6 +421,15 @@ class SettingsDialog(QDialog):
         mrow.addStretch(1)
         mrow.addWidget(label("Volume", "hint", wrap=False))
         mrow.addWidget(self.music_vol)
+        self.music_vibe = QComboBox()
+        for text, value in [("Upbeat (happy, adventurous)", "upbeat"), ("Chill (laid back is fine)", "chill"),
+                            ("Anything that fits", "any")]:
+            self.music_vibe.addItem(text, value)
+        self.music_vibe.setToolTip("The channel's sound. Sad songs are never picked; scary and heavy ones only "
+                                   "for dangerous moments. Upbeat also skips low-energy songs.")
+        self.music_vibe.setCurrentIndex(max(self.music_vibe.findData(str(cfg["music"].get("vibe", "upbeat"))), 0))
+        mrow.addWidget(label("Feel", "hint", wrap=False))
+        mrow.addWidget(self.music_vibe)
         self.music_duck = QCheckBox("Lower the music while I talk")
         self.music_duck.setChecked(bool(cfg["music"].get("duck", True)))
         mbox2 = QVBoxLayout()
@@ -695,6 +704,7 @@ class SettingsDialog(QDialog):
         m["folders"] = [self.music_dirs.item(i).text() for i in range(self.music_dirs.count())]
         m["volume_db"] = self.music_vol.currentData()
         m["duck"] = self.music_duck.isChecked()
+        m["vibe"] = self.music_vibe.currentData()
         return s
 
     def save(self):

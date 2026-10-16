@@ -251,7 +251,19 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     kept_ids = [bid for rng in kept_ranges(blocks, plan, durations, ed, voices) for bid in rng.block_ids]
     want_cold_open = bool(video.get("cold_open", ed.get("cold_open", True)))
     history = music.load_history()
-    library_text = music.library_text(library, history) if library else ""
+    # The channel's music feel decides what the AI may pick from: nothing sad ever, and in the
+    # default "upbeat" feel nothing low-energy either. Scary tracks only for scary moments.
+    vibe = str(mcfg.get("vibe", "upbeat"))
+    offered, scary = music.for_vibe(library, vibe)
+    library_text = music.library_text(offered, history) if offered else ""
+    if scary and library_text:
+        library_text += ("\n\nScary or big moments only (the deep dark, being hunted, very low health, "
+                         "big fights and chases):\n"
+                         + music.library_text(scary, history))
+    if library and len(offered) < len(library):
+        r.log(f"Music feel '{vibe}': {len(offered)} of {len(library)} tracks fit"
+              + (f", {len(scary)} kept for scary moments" if scary else ""))
+    library = offered + scary
     md_file = out / "metadata.json"
     md = metadata.Metadata()
     if use_ai:
@@ -259,6 +271,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         if (cached and cached.pop("_cold_open_requested", None) == want_cold_open
                 and cached.pop("_music_requested", False) == bool(library)
                 and cached.pop("_rules", 0) == metadata.RULES_VERSION
+                and cached.pop("_vibe", "upbeat") == vibe
                 and md_file.stat().st_mtime >= plan_file.stat().st_mtime):
             md = metadata.Metadata(**cached)
         else:
@@ -268,7 +281,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
                                        cold_open=want_cold_open, notes=notes, music_library=library_text)
                 md_file.write_text(json.dumps({**md.__dict__, "_cold_open_requested": want_cold_open,
                                                "_music_requested": bool(library),
-                                               "_rules": metadata.RULES_VERSION},
+                                               "_rules": metadata.RULES_VERSION, "_vibe": vibe},
                                               indent=2, ensure_ascii=False), encoding="utf-8")
             except Exception as exc:  # packaging is a bonus; never lose the timeline over it
                 r.log(f"titles/description skipped: {exc}")
@@ -592,12 +605,27 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             raw.append((max(tl.seconds(rec), music_start), tracks, c.get("why", "")))
         if not raw:   # no AI picks: one fresh track per chapter
             cue_starts = sorted({max(t, music_start) for t, _ in chapter_times} | {music_start})
-            rng_tracks = sorted(library, key=lambda t: history.get(t.path, 0))
+            rng_tracks = sorted(offered or library, key=lambda t: history.get(t.path, 0))
             raw = [(s, [rng_tracks[i % len(rng_tracks)]], "") for i, s in enumerate(cue_starts)]
         raw.sort(key=lambda x: x[0])
         # Talking on the finished timeline (also used for ducking below).
         speech = [(tl.seconds(starts[b]), tl.seconds(ends[b])) for b in starts] + vo_spans
         raw = music.tidy_cues(raw, speech, music_start, total)
+        if scary:
+            # Scary/heavy music only where the story outline says it's dangerous.
+            outline = story.cached(out / "story.json", blocks)
+            beat_at = story.beat_of(outline, blocks) if outline else {}
+            timeline_blocks = sorted((tl.seconds(starts[b]), b) for b in starts)
+
+            def danger_at(t: float) -> bool:
+                import bisect
+                i = bisect.bisect_right([s for s, _ in timeline_blocks], t + 1.0) - 1
+                near = [b for _, b in timeline_blocks[max(i, 0):i + 6]]
+                return any(beat_at.get(b, {}).get("kind") in music.SPECIAL_BEATS for b in near)
+            raw, swaps = music.guard_special(raw, offered, scary, danger_at, history)
+            for note in swaps:
+                r.log(note)
+                review.append(f"  ({note})")
         cues = [music.Cue(s, raw[i + 1][0] if i + 1 < len(raw) else total, tr, why)
                 for i, (s, tr, why) in enumerate(raw)]
         pieces = [pc for pc in music.fill(cues, library, history, seed=len(blocks)) if pc.length >= 2]
