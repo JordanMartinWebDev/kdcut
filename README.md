@@ -41,10 +41,22 @@ candidates. Re-running the same video is fast because the transcript and the AI'
 
 ## Thumbnails
 
-Drag an in-game screenshot (F2) into the **Thumbnail** box. KDcut makes three 1280x720
-thumbnails using:
+Drag in-game screenshots (F2, up to 5) into the **Thumbnail** box. KDcut makes three 1280x720
+thumbnails in the **showcase** style (the default), where the build or the view is the hook:
 
-- **2–4 punchy words** with a thick outline, plus one word in the series' accent colour
+- **vista**: one screenshot fills the frame, the series title block in the emptier top corner
+- **hero**: your character big on one side (cropped at the legs, white outline, soft light rays
+  behind), the build on the other side
+- **collage**: 3-5 screenshots in a grid with the best one in the middle, title at the bottom
+
+The only text is the **series title block**: your series logo with the episode line under it
+("EPISODE 4"). The AI picks the layout, which screenshots, where the subject is (so the crop keeps
+it big) and the pose; it doesn't add icons or hype words. Screenshots stay bright and punchy.
+The older style with hook words, icons and arrows is still there: set `"style": "classic"` under
+`thumbnails` in your settings.
+
+What goes in:
+
 - **your character**: transparent PNG poses of your skin. Set the folder in Settings, and name
   files by mood (`waving.png`, `thinking.png`, `shocked.png`) so the AI picks the right one.
   Optionally add a `poses.json` beside them:
@@ -61,14 +73,11 @@ thumbnails using:
   character looks in the PNG so KDcut can flip it toward the words, and `_style.glow` adds a
   soft brand-coloured halo behind the character (a series theme's `character_glow` overrides it).
   Files starting with `_` are ignored.
-- **one or two item icons** from your packs, when they tell the story
-- a **ring and arrow** on the key thing in the screenshot, when there is one
-- **series branding**: your series logo (the **Series logo…** button), episode badge, and
-  accent colours
+- **series branding**: your series logo (the **Series logo…** button) and the episode line
+- classic style only: 2-4 hook words, one or two item icons from your packs, and a ring and
+  arrow on the key thing in the screenshot
 
-Every video gets a different composition: words beside a big character, a wide banner across
-the top, or low words with icons above. The logo and episode tab go in whichever corner is free.
-The first time a series gets thumbnails, the AI designs its style (colours and font, matched to
+The three concepts use different layouts each time. The first time a series gets thumbnails, the AI designs its style (colours and font, matched to
 your logo and character) and saves it, so every later episode looks consistent. The bottom-right
 corner is kept clear because YouTube puts the video length there. Click **New thumbnail ideas**
 for another round; earlier ones are never overwritten.

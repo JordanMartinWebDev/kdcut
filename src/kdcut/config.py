@@ -60,6 +60,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "thumbnails": {
         "enabled": True,
+        "style": "showcase",       # showcase: the build/view is the hook | classic: hook words + icons
         "characters_dir": "",      # folder of transparent PNG poses of your skin
         "themes_dir": str(HOME_DIR / "themes"),
         "variants": 3,

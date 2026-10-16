@@ -1050,7 +1050,7 @@ class MainWindow(QMainWindow):
                                      "castle-walls-timelapse.mp4", self.broll,
                                      vid_filter[:-1] + " *.png *.jpg)", self), 2)
         self.shots = DropList(appcore.SCREENSHOT_EXTS,
-                              "Drag your in-game screenshot for the thumbnail here (up to 3)",
+                              "Drag in-game screenshots for the thumbnail here (up to 5; 3+ allows a collage)",
                               sort_on_add=False)
         lists.addWidget(drop_section("Thumbnail", "F2 screenshots from Minecraft work great.", self.shots,
                                      "Images (*.png *.jpg *.jpeg *.webp *.bmp)", self), 2)
@@ -1201,7 +1201,7 @@ class MainWindow(QMainWindow):
                                recordings=[str(p) for p in self.recs.paths()],
                                broll=[str(p) for p in self.broll.paths()],
                                series=self.series.currentText().strip(), episode=self.episode.text().strip(),
-                               screenshots=[str(p) for p in self.shots.paths()[:3]])
+                               screenshots=[str(p) for p in self.shots.paths()[:5]])
 
     def video_info(self, proj: appcore.Project) -> dict:
         return {"title": proj.name, "topic": proj.topic, "series": proj.series, "episode": proj.episode,
@@ -1444,7 +1444,7 @@ class MainWindow(QMainWindow):
         proj = self.project()
         shots = [Path(s) for s in proj.screenshots]
         if not shots:
-            shots = sorted((self.out_dir / "thumbnail_frames").glob("frame_*.jpg"))[:3]
+            shots = sorted((self.out_dir / "thumbnail_frames").glob("frame_*.jpg"))[:5]
         if not shots:
             QMessageBox.information(self, APP_NAME, "Drag a screenshot into the Thumbnail box first "
                                                     "(← Change something and re-run).")

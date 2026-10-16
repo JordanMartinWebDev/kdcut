@@ -151,7 +151,7 @@ class EndToEnd(unittest.TestCase):
         cls.cfg = config._merge(cls.cfg, {"music": {"folders": [str(cls.tmp / "music")], "volume_db": -20},
                                           "edit": {"overlays": True}})
         cls.cfg = config._merge(cls.cfg, {"vision": {"enabled": True, "min_gap": 8},
-                                          "thumbnails": {"characters_dir": str(chars),
+                                          "thumbnails": {"style": "classic", "characters_dir": str(chars),
                                                          "themes_dir": str(home / "themes")}})
         cls.video = {"title": "Episode 12", "topic": "Building a castle", "series": "Hardcore",
                      "episode": 12, "screenshots": [str(shot)]}

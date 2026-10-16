@@ -744,6 +744,10 @@ def make(cfg: dict, video: dict, screenshots: list[Path], out_dir: Path, *, titl
     """Create thumbnail variants in out_dir/thumbnails. Returns the image paths."""
     if not screenshots:
         return []
+    if cfg.get("thumbnails", {}).get("style", "showcase") == "showcase":
+        from kdcut import showcase
+        return showcase.make(cfg, video, screenshots, out_dir, titles=titles, text_ideas=text_ideas,
+                             index=index, use_ai=use_ai, caller=caller, log=log)
     tdir = out_dir / "thumbnails"
     tdir.mkdir(parents=True, exist_ok=True)
     series = video.get("series") or ""

@@ -542,7 +542,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     thumbs: list[Path] = []
     if cfg.get("thumbnails", {}).get("enabled", True):
         if not shots:   # no screenshot given: use the frames the AI picked from the video
-            shots = sorted((out / "thumbnail_frames").glob("frame_*.jpg"))[:3]
+            shots = sorted((out / "thumbnail_frames").glob("frame_*.jpg"))[:5]
         try:
             thumbs = make_thumbnails(out, cfg, video, shots, use_ai, caller=call, log=r.log, index=index)
         except Exception as exc:  # thumbnails are a bonus; never lose the edit over them
