@@ -26,7 +26,7 @@ class Clip:
     rec: int           # frames from timeline start
     lane: int = 0      # 0 = main story, >0 video tracks above, <0 audio tracks below
     enable: str = "all"  # all | video | audio
-    role: str = "main"   # main | broll | overlay | sfx
+    role: str = "main"   # main | broll | overlay | sfx | timelapse | voiceover | ...
     name: str = ""
     is_image: bool = False
     volume_db: float | None = None   # clip gain (background music)
@@ -87,9 +87,11 @@ def teaser_range(block: Block, pick: dict, words: list, duration: float, voice=N
 
 
 def kept_ranges(blocks: list[Block], plan: Plan, durations: list[float], edit: dict,
-                voices: dict | None = None) -> list[Range]:
+                voices: dict | None = None, break_after: set[str] | None = None) -> list[Range]:
     """Source ranges to keep. `voices` (source -> vad.Voice) snaps cut points to where the
-    voice really starts and stops, since Whisper's word timings are a little loose."""
+    voice really starts and stops, since Whisper's word timings are a little loose.
+    A range always ends after a block in `break_after` (something gets inserted there)."""
+    break_after = break_after or set()
     pad_b = float(edit.get("pad_before", 0.15))
     pad_a = float(edit.get("pad_after", 0.35))
     max_pause = float(edit.get("keep_pauses_up_to", 2.5))
@@ -145,7 +147,8 @@ def kept_ranges(blocks: list[Block], plan: Plan, durations: list[float], edit: d
                 elif nxt is not None and is_dropped(nxt):
                     e = min(e, max(onset(nxt.start), real_end))
                 e = min(e, limit)
-                if cur and s - cur.end <= max_pause:
+                ends_here = cur is not None and cur.block_ids[-1] in break_after and cur.block_ids[-1] != b.id
+                if cur and s - cur.end <= max_pause and not ends_here:
                     cur.end = max(cur.end, e)
                     if b.id not in cur.block_ids:
                         cur.block_ids.append(b.id)
@@ -180,12 +183,17 @@ class _Lanes:
 
 def build(name: str, recordings: list[Path], blocks: list[Block], plan: Plan,
           fps: Fraction, width: int, height: int, durations: list[float], edit: dict,
-          prefix: Range | None = None, voices: dict | None = None) -> tuple[Timeline, dict[str, int], dict[str, int]]:
+          prefix: Range | None = None, voices: dict | None = None,
+          inserts: dict[str, list[Clip]] | None = None) -> tuple[Timeline, dict[str, int], dict[str, int]]:
     """Lay out the main story. Returns the timeline plus block-id -> timeline frame maps
     for the start and end of every kept block (used to place B-roll, SFX, chapters).
 
     `prefix` is an optional cold open: a short teaser copied from later in the video and
-    placed before everything else."""
+    placed before everything else.
+
+    `inserts` puts standalone clips (timelapses) into the story: block id -> clips that play
+    right after that block, as scenes of their own. A block that didn't survive the edit
+    moves its clips to the kept block before it; the key "__end__" means after the story."""
     tl = Timeline(name=name, fps=fps, width=width, height=height)
     by_id = {b.id: b for b in blocks}
     starts: dict[str, int] = {}
@@ -198,18 +206,45 @@ def build(name: str, recordings: list[Path], blocks: list[Block], plan: Plan,
             tl.main.append(Clip(path=recordings[prefix.source], src_in=src_in, dur=dur, rec=0,
                                 role="cold_open", name=f"Cold open - {recordings[prefix.source].stem}"))
             rec = dur
-    for r in kept_ranges(blocks, plan, durations, edit, voices):
+    inserts = {k: list(v) for k, v in (inserts or {}).items() if v}
+    ranges = kept_ranges(blocks, plan, durations, edit, voices)
+    if inserts:
+        kept = {bid for r in ranges for bid in r.block_ids}
+        order = [b.id for b in blocks]
+        moved: dict[str, list[Clip]] = {}
+        for key, clips in inserts.items():
+            anchor = key
+            if key != "__end__" and key not in kept:
+                i = order.index(key) if key in order else len(order)
+                anchor = next((order[j] for j in range(min(i, len(order) - 1), -1, -1) if order[j] in kept),
+                              "__end__")
+            moved.setdefault(anchor, []).extend(clips)
+        inserts = moved
+        ranges = kept_ranges(blocks, plan, durations, edit, voices, break_after=set(inserts) - {"__end__"})
+
+    def place_inserts(key: str, rec: int) -> int:
+        for c in inserts.pop(key, []):
+            c.rec = rec
+            tl.main.append(c)
+            rec += c.dur
+        return rec
+
+    last_range = {bid: i for i, r in enumerate(ranges) for bid in r.block_ids}
+    for i, r in enumerate(ranges):
         src_in = tl.frames(r.start)
         dur = tl.frames(r.end) - src_in
-        if dur <= 0:
-            continue
-        tl.main.append(Clip(path=recordings[r.source], src_in=src_in, dur=dur, rec=rec,
-                            name=recordings[r.source].stem))
-        for bid in r.block_ids:
-            b = by_id[bid]
-            starts.setdefault(bid, rec + max(tl.frames(b.start) - src_in, 0))
-            ends[bid] = min(rec + tl.frames(b.end) - src_in, rec + dur)
-        rec += dur
+        if dur > 0:
+            tl.main.append(Clip(path=recordings[r.source], src_in=src_in, dur=dur, rec=rec,
+                                name=recordings[r.source].stem))
+            for bid in r.block_ids:
+                b = by_id[bid]
+                starts.setdefault(bid, rec + max(tl.frames(b.start) - src_in, 0))
+                ends[bid] = min(rec + tl.frames(b.end) - src_in, rec + dur)
+            rec += dur
+        if last_range.get(r.block_ids[-1]) == i:     # not halfway through a block
+            rec = place_inserts(r.block_ids[-1], rec)
+    for key in list(inserts):          # anything left (its block had no frames): after the story
+        rec = place_inserts(key, rec)
     return tl, starts, ends
 
 

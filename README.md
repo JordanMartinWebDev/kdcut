@@ -30,9 +30,16 @@ After that, the only thing that leaves your PC is transcript text sent to Claude
 1. Type a **name** and a line about **what happens** in the video.
 2. Drag your **recordings** into the left box. You can add one or several sessions; they're
    sorted by filename, which matches OBS's date-time naming. Drag to reorder.
-3. Optionally, drag **B-roll** (Flashback renders, timelapses) into the right box. Name files
-   after what they show, e.g. `castle-walls-timelapse.mp4`, so the AI knows where to put them.
-4. Click **Edit my video**. When it finishes, click **How to open in Resolve**, then import the
+3. Optionally, drag **B-roll** into the middle box: clips shown on top of the gameplay while you
+   keep talking. Name files after what they show, e.g. `castle-walls-flyover.mp4`.
+4. Optionally, drag **timelapses** (silent Flashback renders) into the **Timelapses** box. Each one
+   plays as its own scene: right after you start that build ("alright, let's get started on this
+   house"), the video dips into the timelapse and back out when it's done, with music under it.
+   To talk over a timelapse, record a voiceover afterwards and drop the audio file in the same box.
+   Name it like its timelapse (`House.mp4` + `House.m4a`) or let the AI match it by what you say.
+   Long pauses and anything after "cut that" are taken out of the voiceover, and a timelapse
+   that's shorter than its voiceover is slowed down to fit.
+5. Click **Edit my video**. When it finishes, click **How to open in Resolve**, then import the
    `.fcpxml` with **File > Import > Timeline**.
 
 Each video gets its own folder in `Videos\KDcut\<name>` containing the timeline, `review.md`
@@ -281,8 +288,9 @@ kdcut init "D:\KDPlays\Hardcore Ep 12"
 
 1. Copy your OBS recordings into `recordings\`. They're edited in filename order, and OBS's
    date-time names already sort correctly.
-2. Put Flashback renders and timelapses in `broll\` with **descriptive names**
-   (`castle-walls-timelapse.mp4`, `base-flyover.mp4`). The AI places them by matching names to what you say.
+2. Put B-roll (shown over the gameplay while you talk) in `broll\` with **descriptive names**
+   (`base-flyover.mp4`). The AI places them by matching names to what you say. Silent timelapses
+   that play as their own scene go in `timelapses\`, with any voiceover audio for them.
 3. Optionally fill in `kdcut.toml` with the topic or series. It helps the AI judge what matters.
 4. Run:
 
