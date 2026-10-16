@@ -319,8 +319,8 @@ class SettingsDialog(QDialog):
         krow.addWidget(test)
         kbox = QVBoxLayout()
         kbox.addLayout(krow)
-        link = label('Get a key at <a href="https://console.anthropic.com/settings/keys" '
-                     'style="color:#7fd483">console.anthropic.com</a> (Settings → API Keys).', "hint")
+        link = label('Get a key at <a href="https://platform.claude.com/settings/keys" '
+                     'style="color:#7fd483">platform.claude.com</a> (Settings → API keys).', "hint")
         link.setOpenExternalLinks(True)
         kbox.addWidget(link)
         self.key_status = label("", "hint")
