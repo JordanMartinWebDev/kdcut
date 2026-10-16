@@ -51,6 +51,23 @@ class Voice:
             i += 1
         return max(t, min((last_on + 1) * STEP, t + limit))
 
+    def speech_end(self, t: float, back: float = 1.2) -> float:
+        """Where the talking really stops near a Whisper word end t. Whisper often stretches
+        the last word of a phrase well into the silence after it (about 0.6 s on real
+        footage), which leaves a dead tail after each cut. If the voice is still going at t,
+        this is offset_after(t); if it is already quiet, step back to the last voiced moment
+        (at most `back` seconds)."""
+        if not self.levels:
+            return t
+        if any(self.on(t + k * STEP) for k in range(-2, 4)):
+            return self.offset_after(t)
+        i, stop = self._i(t), self._i(t - back)
+        while i > stop:
+            if self.levels[i] > self.threshold:
+                return min(t, (i + 1) * STEP)
+            i -= 1
+        return t            # nothing voiced nearby (a quiet word): trust Whisper
+
     def onset_before(self, t: float, limit: float = 0.4, quiet: float = 0.1) -> float:
         """If the voice had already started before t, where it really starts."""
         if not self.levels or not any(self.on(t + k * STEP) for k in range(-3, 3)):

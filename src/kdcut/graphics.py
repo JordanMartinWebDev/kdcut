@@ -64,15 +64,45 @@ def coming_up_png(dest: Path, width: int = 1920, height: int = 1080, text: str =
     return dest
 
 
+# Teaser brightness (see media.brightness: 75th percentile luma, 0-255).
+BRIGHT = 70         # bright enough for the usual punchy black and white look
+VIEWABLE = 15       # dim but fine once brightened; below this it stays in colour
+TARGET = 60         # what a dim teaser is brightened to (more than this looks foggy)
+
+
+def teaser_look(level: float | None) -> tuple[str, float]:
+    """('bw' | 'color', gamma) for footage of this brightness. Black and white throws away
+    the colour that makes dark footage readable at all (torches, ores, mobs' eyes), so dark
+    teasers stay in colour; anything dim is brightened first."""
+    import math
+    if level is None or level >= BRIGHT:
+        return "bw", 1.0
+    gamma = math.log(max(level, 1.0) / 255) / math.log(TARGET / 255)
+    gamma = min(max(gamma, 1.0), 2.5)
+    return ("bw" if level >= VIEWABLE else "color"), round(gamma, 2)
+
+
 def render_teaser(src: Path, start: float, frames: int, fps, dest: Path, width: int, height: int,
-                  log=None, flash: float = 0.2) -> Path:
+                  log=None, flash: float = 0.2, level: float | None = None) -> tuple[Path, str]:
     """The cold open as its own clip: black and white, 'COMING UP' in the corner, and a quick
-    flash to white at the end that leads into the episode. Keeps the recording's audio."""
+    flash to white at the end that leads into the episode. Keeps the recording's audio.
+    Dim footage is brightened first and dark footage stays in colour, so the teaser is never
+    a black screen. Returns (file, a note on the look used)."""
     seconds = frames / float(fps)
+    if level is None:
+        level = media.brightness(src, start, seconds)
+    look, gamma = teaser_look(level)
     tag = coming_up_png(dest.with_name(dest.stem + "_tag.png"), width, height)
+    grade = f"eq=gamma={gamma}:saturation={1.15 if look == 'color' else 1}," if gamma > 1 else ""
+    grade += "hue=s=0,eq=contrast=1.12:brightness=-0.02" if look == "bw" and gamma == 1 else (
+        "hue=s=0" if look == "bw" else "null")
+    note = ("black and white" if look == "bw" else "kept in colour (dark footage)") + (
+        f", brightened (gamma {gamma})" if gamma > 1 else "")
+    if log and gamma > 1:
+        log(f"Teaser footage is dark (level {level:.0f}/255): {note}")
     vf = (f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
           f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps},"
-          "hue=s=0,eq=contrast=1.12:brightness=-0.02[bw];"
+          f"{grade}[bw];"
           f"[bw][1:v]overlay=0:0:format=auto,"
           f"fade=t=out:st={max(seconds - flash, 0):.3f}:d={flash:.3f}:color=white,format=yuv420p[v]")
     cmd = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", str(src), "-loop", "1", "-i", str(tag),
@@ -85,4 +115,4 @@ def render_teaser(src: Path, start: float, frames: int, fps, dest: Path, width: 
         dest.unlink(missing_ok=True)
         raise media.MediaError((proc.stderr.strip().splitlines() or ["ffmpeg failed"])[0][:300])
     media._PROBE_CACHE.pop(dest, None)
-    return dest
+    return dest, note

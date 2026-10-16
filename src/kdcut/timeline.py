@@ -79,7 +79,7 @@ def teaser_range(block: Block, pick: dict, words: list, duration: float, voice=N
         last = first + float(pick.get("seconds", 6) or 6) - lead
     if voice is not None:
         first = voice.onset_before(first)
-        last = voice.offset_after(last)
+        last = voice.speech_end(last)
     start = max(first - lead, 0.0)
     end = last + 0.4
     end = min(max(end, start + 3.0), start + 12.0, duration)
@@ -108,6 +108,7 @@ def kept_ranges(blocks: list[Block], plan: Plan, durations: list[float], edit: d
         v = (voices or {}).get(src)
         onset = (lambda t: v.onset_before(t)) if v else (lambda t: t)
         offset = (lambda t: v.offset_after(t)) if v else (lambda t: t)
+        speech_end = (lambda t: v.speech_end(t)) if v else (lambda t: t)
         cur: Range | None = None
         cur_spoken_end = 0.0       # where the last kept words really end
         for i, b in enumerate(src_blocks):
@@ -136,7 +137,7 @@ def kept_ranges(blocks: list[Block], plan: Plan, durations: list[float], edit: d
                     continue        # Whisper put a word where nothing was said: keep no frames
                 following = pieces[k + 1][0] if not last else (nxt.start if nxt else limit)
                 real_start = max(onset(p_start), prev_end if k == 0 else pieces[k - 1][1])
-                real_end = min(offset(p_end), max(p_end, following - 0.05))
+                real_end = min(speech_end(p_end), max(p_end, following - 0.05))
                 s = max(real_start - pad_b, prev_end if k == 0 else pieces[k - 1][1], 0.0)
                 e = real_end + pad_a + (plan.extend.get(b.id, 0.0) if last else 0.0)
                 if not last:

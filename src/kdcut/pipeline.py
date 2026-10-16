@@ -228,10 +228,10 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         hl = next((by_id[i] for i in kept_ids if "highlight" in by_id[i].flags), None)
         if hl is not None:
             md.cold_open = {"id": hl.id, "seconds": 6, "reason": "you said 'clip that'"}
-    prefix = None
-    if md.cold_open and md.cold_open.get("id") in by_id:
-        cb = by_id[md.cold_open["id"]]
-        prefix = teaser_range(cb, md.cold_open, words[cb.source], durations[cb.source], voices.get(cb.source))
+    prefix, teaser_level, teaser_note = None, None, ""
+    if md.cold_open:
+        md.cold_open, prefix, teaser_level, teaser_note = _pick_cold_open(
+            md, by_id, kept_ids, recordings, words, durations, voices, log=r.log)
 
     # 4. Timeline -------------------------------------------------------------------
     r.check()
@@ -278,19 +278,25 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         # Black and white with "COMING UP", so viewers know it's from later in the episode.
         try:
             r.check()
-            styled = graphics.render_teaser(teaser.path, tl.seconds(teaser.src_in), teaser.dur, tl.fps,
-                                            work / "teaser.mp4", width, height, log=r.log)
+            styled, look = graphics.render_teaser(teaser.path, tl.seconds(teaser.src_in), teaser.dur, tl.fps,
+                                                  work / "teaser.mp4", width, height, log=r.log,
+                                                  level=teaser_level)
+            teaser_note = "; ".join(x for x in (teaser_note, look if look != "black and white" else "") if x)
             had_stems = bool(stems.get(str(teaser.path)))
             teaser.path, teaser.src_in, teaser.name = styled, 0, "Cold open - coming up"
             teaser.enable = "video" if had_stems else "all"
         except media.MediaError as exc:
             r.log(f"Kept the teaser plain (couldn't render the 'Coming up' look: {exc})")
+    if not teaser and teaser_note:
+        review.append(f"0:00  No cold open: {teaser_note}")
     if teaser:
         cb = by_id[md.cold_open["id"]]
         tl.markers.append(Marker(rec=0, name="Cold open (teaser)", kind="note"))
         review.append(f"0:00  Cold open: {tl.seconds(teaser.dur):.0f}s teaser from rec {cb.source + 1} @ "
                       f"{fmt_ts(cb.start)}  \"{_short(cb.text, 60)}\""
                       + (f"  ({md.cold_open['reason']})" if md.cold_open.get("reason") else ""))
+        if teaser_note:
+            review.append(f"      Teaser: {teaser_note}")
         if index:
             whoosh = index.best("whoosh", "sfx") or index.best("swoosh", "sfx")
             if whoosh:
@@ -556,6 +562,43 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
 
 
 END_SCREEN_POSES = ("point_side", "presenting", "point_viewer", "wave")
+
+
+def _pick_cold_open(md, by_id: dict, kept_ids: list[str], recordings, words, durations, voices,
+                    log=print):
+    """The AI's teaser pick, unless it's too dark to see: then its backups, then any 'clip
+    that' moment, whichever is brightest enough. Returns (pick, range, brightness, note);
+    pick is None when every candidate is too dark (no teaser beats a black screen)."""
+    picks = [md.cold_open, *(md.cold_open_backups or [])]
+    picks += [{"id": i, "seconds": 6, "reason": "you said 'clip that'"}
+              for i in kept_ids if "highlight" in by_id[i].flags]
+    seen, tried = set(), []
+    for pick in picks:
+        if not isinstance(pick, dict) or pick.get("id") not in by_id or pick["id"] in seen:
+            continue
+        seen.add(pick["id"])
+        cb = by_id[pick["id"]]
+        rng = teaser_range(cb, pick, words[cb.source], durations[cb.source], voices.get(cb.source))
+        level = media.brightness(Path(recordings[rng.source]), rng.start, rng.end - rng.start)
+        if level is None or level >= graphics.VIEWABLE:
+            note = "" if not tried else (
+                f"first pick ({tried[0][0]['id']}) was too dark to see, used {pick['id']} instead")
+            if tried:
+                log(f"Cold open: {note}")
+            return pick, rng, level, note
+        tried.append((pick, rng, level))
+        if len(tried) >= 4:
+            break
+    if not tried:
+        return None, None, None, ""
+    pick, rng, level = max(tried, key=lambda t: t[2])
+    if level >= 6:
+        note = f"every pick was dark; used the brightest ({pick['id']})" if len(tried) > 1 else ""
+        return pick, rng, level, note
+    note = (f"skipped, the teaser moment{'s' if len(tried) > 1 else ''} "
+            f"({', '.join(t[0]['id'] for t in tried)}) {'were' if len(tried) > 1 else 'was'} too dark to see")
+    log(f"Cold open {note}")
+    return None, None, level, note
 
 
 def _add_end_screen(tl, cfg: dict, video: dict, out: Path, work: Path, width: int, height: int,

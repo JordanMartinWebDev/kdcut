@@ -277,6 +277,31 @@ def extract_frame(src: Path, at: float, dest: Path, width: int | None = None) ->
     return dest
 
 
+def brightness(src: Path, start: float, seconds: float, samples: int = 6) -> float | None:
+    """How bright a stretch of footage is, 0 (black) to 255 (white): the 75th percentile of
+    the picture's luma, middle of the frame only (the hotbar and chat would make a pitch-black
+    cave look fine), as the median over a few sampled frames. None if it can't be read."""
+    seconds = max(seconds, 0.5)
+    w, h = 160, 90
+    vf = (f"fps={samples / seconds:.4f},crop=iw:ih*0.74:0:ih*0.08,"
+          f"scale={w}:{h}:out_range=full,format=gray")
+    try:
+        proc = run_quiet(["ffmpeg", "-v", "error", "-ss", f"{max(start, 0):.3f}", "-t", f"{seconds:.3f}",
+                          "-i", str(src), "-vf", vf, "-frames:v", str(samples),
+                          "-f", "rawvideo", "-pix_fmt", "gray", "-"], timeout=120, text=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    raw, n = proc.stdout or b"", w * h
+    vals = []
+    for k in range(len(raw) // n):
+        frame = sorted(raw[k * n:(k + 1) * n])
+        vals.append(frame[int(n * 0.75)])
+    if not vals:
+        return None
+    vals.sort()
+    return float(vals[len(vals) // 2])
+
+
 def corner_color(path: Path, frame: int = 5) -> tuple[int, int, int] | None:
     """Average colour of the top-left corner of one frame (used to spot green screens)."""
     try:
