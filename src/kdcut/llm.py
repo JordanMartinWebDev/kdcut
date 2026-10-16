@@ -46,7 +46,7 @@ def call_tool(cfg: dict, system: str, user, tool_name: str, tool_description: st
     key = api_key(cfg)
     if not key:
         raise LLMError(
-            "No Claude API key. Add one in Settings (get a key at console.anthropic.com), "
+            "No Claude API key. Add one in Settings (get a key at platform.claude.com/settings/keys), "
             "or turn off the AI edit."
         )
     model = cfg["llm"]["model"]
@@ -146,7 +146,7 @@ def check_key(key: str) -> tuple[bool, str]:
             return True, "Key works."
     except urllib.error.HTTPError as exc:
         if exc.code in (401, 403):
-            return False, "That key was rejected. Copy it again from console.anthropic.com."
+            return False, "That key was rejected. Copy it again from platform.claude.com/settings/keys."
         return False, f"The API answered with error {exc.code}. Try again in a minute."
     except urllib.error.URLError as exc:
         return False, f"Couldn't reach the Claude API ({exc.reason}). Check your internet."

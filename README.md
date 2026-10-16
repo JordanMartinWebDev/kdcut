@@ -13,7 +13,7 @@ YouTube. You review the timeline in Resolve, tweak it, and export.
    Windows may say *"Windows protected your PC"* because the app isn't code-signed. Click
    **More info → Run anyway**.
 2. The first time KDcut opens, it asks for two things:
-   - your **Claude API key** (from [console.anthropic.com](https://console.anthropic.com/settings/keys)), and
+   - your **Claude API key** (from [platform.claude.com](https://platform.claude.com/settings/keys)), and
    - your **editing pack folders**, which it indexes once.
 3. If you have an NVIDIA GPU, click **Download GPU support** in Settings (one time, about 1 GB)
    so transcription runs on the GPU.
@@ -234,7 +234,7 @@ py -m venv .venv
 pip install -e ".[all]"        # kdcut + faster-whisper + NVIDIA CUDA libraries
 ```
 
-Get an API key at <https://console.anthropic.com> and save it:
+Get an API key at <https://platform.claude.com/settings/keys> and save it:
 
 ```powershell
 setx ANTHROPIC_API_KEY "sk-ant-..."
