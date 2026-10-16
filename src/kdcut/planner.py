@@ -15,6 +15,7 @@ from kdcut.blocks import Block, fmt_ts
 class Plan:
     drop: dict[str, str] = field(default_factory=dict)      # block id -> reason
     extend: dict[str, float] = field(default_factory=dict)  # block id -> seconds of silent gameplay to keep after it
+    fast: list[dict] = field(default_factory=list)          # {id, seconds, speed, reason}: sped-up quiet stretch after a block
     broll: list[dict] = field(default_factory=list)         # {file, at, duration, reason}
     overlays: list[dict] = field(default_factory=list)      # {at, query, duration}
     sfx: list[dict] = field(default_factory=list)           # {at, query, when}
@@ -32,7 +33,7 @@ class Plan:
         return cls(**{k: v for k, v in data.items() if k in known})
 
 
-RULES_VERSION = 4     # bump when the editing rules change, so saved plans are redone
+RULES_VERSION = 5     # bump when the editing rules change, so saved plans are redone
 
 
 def blocks_key(blocks: list[Block]) -> str:
@@ -122,6 +123,18 @@ SCHEMA = {
                 "id": {"type": "string"},
                 "seconds": {"type": "number", "minimum": 1, "maximum": 60},
             }, "required": ["id", "seconds"]},
+        },
+        "fast": {
+            "type": "array",
+            "description": "Speed up a quiet stretch after a block instead of cutting it, so viewers "
+                           "see the progress (travel, mining, building, farming) in a few seconds.",
+            "items": {"type": "object", "properties": {
+                "id": {"type": "string", "description": "The block the quiet stretch follows."},
+                "seconds": {"type": "number", "minimum": 4, "maximum": 900,
+                            "description": "How much of the quiet stretch to show (real seconds)."},
+                "speed": {"type": "number", "minimum": 2, "maximum": 12},
+                "reason": {"type": "string", "description": "2-6 words, e.g. 'walk back to base'"},
+            }, "required": ["id", "seconds", "speed"]},
         },
         "broll": {
             "type": "array",
@@ -220,6 +233,25 @@ def system_prompt(cfg: dict, video: dict) -> str:
         "fine. Use plain descriptive queries made of words from the vocabulary lists.",
         "- Chapters: 3-12 chapters for long videos, titled in the creator's voice.",
         "- Only use block ids that appear in the transcript.",
+        "- The STORY OUTLINE was written from the whole episode before editing. Follow it: beats "
+        "marked 'matters 3' are the spine of the episode, so keep them (trim only waste inside "
+        "them). 'matters 1' beats are the first candidates to go when they're also dull. Keep "
+        "both ends of every thread: a setup whose payoff stays must stay.",
+        "- Blocks carry measurements from the footage in braces, scored 1-5 against the rest of "
+        "this episode: energy (how animated the creator's voice is), action (how much the picture "
+        "changes), menus (share of time in inventory/chest/crafting screens) and hits (sudden loud "
+        "game sounds). Lines like [quiet 45s after: action 1 · menus 80%] describe the wordless "
+        "stretch after a block. Treat them as evidence, never as the decision: the story comes "
+        "first, and a calm block that the story needs stays even at energy 1.",
+        "- Use the numbers where the story doesn't decide: low energy + low action talk that "
+        "doesn't move the story is the first to cut; menu-heavy stretches (sorting chests, "
+        "crafting) are usually cuttable unless the creator is explaining something that matters.",
+        "- Quiet stretches: keep the lively ones in real time with an extend (action 4-5, hits, "
+        "anything the outline calls danger or discovery, up to 60s). For long stretches where "
+        "progress is happening slowly (walking or flying somewhere, strip mining, building, "
+        "farming), use fast instead of cutting: the viewer sees it happen in a few seconds "
+        "(speed 3-8, ending up 3-15 s on screen). Cut stretches that are mostly menus, AFK or "
+        "nothing at all. Never use fast for a stretch with talking in it.",
         "- Lines starting with [on screen ...] describe what was happening during a stretch "
         "where the creator wasn't talking (action 0 = nothing, 3 = intense). For action 2-3, "
         "keep that gameplay with an extend on the block just before it (up to 60s). Action 0-1 "
@@ -250,7 +282,8 @@ def system_prompt(cfg: dict, video: dict) -> str:
 
 
 def format_blocks(blocks: list[Block], recordings: list[Path], context: list[Block] = (),
-                  notes: dict[str, list[str]] | None = None) -> str:
+                  notes: dict[str, list[str]] | None = None, measured: dict[str, str] | None = None,
+                  beats: dict[str, dict] | None = None) -> str:
     out = []
     if context:
         out.append("(Earlier blocks, for context only. Do not edit these.)")
@@ -258,12 +291,16 @@ def format_blocks(blocks: list[Block], recordings: list[Path], context: list[Blo
             out.append(f"  {b.id} {b.text}")
         out.append("")
     from kdcut.blocks import ends_sentence
-    last_src = None
+    last_src, last_beat = None, None
     for k, b in enumerate(blocks):
         if b.source != last_src:
             out.append(f"--- Recording {b.source + 1}: {recordings[b.source].name} ---")
             last_src = b.source
-        tags = []
+        beat = (beats or {}).get(b.id)
+        if beat is not None and beat is not last_beat:
+            out.append(f"  == {beat.get('kind')} (matters {beat.get('matters')}): {beat.get('what')}")
+        last_beat = beat
+        tags: list[str] = []
         if "forced_drop" in b.flags:
             tags.append("[FORCED CUT]")
         if "highlight" in b.flags:
@@ -271,6 +308,8 @@ def format_blocks(blocks: list[Block], recordings: list[Path], context: list[Blo
         if "chapter" in b.flags:
             tags.append("[CHAPTER]")
         tag_str = " " + " ".join(tags) if tags else ""
+        if (measured or {}).get(b.id):
+            tag_str += " " + measured[b.id]
         nxt = blocks[k + 1] if k + 1 < len(blocks) else None
         runs_on = (nxt is not None and nxt.source == b.source and not ends_sentence(b.text)
                    and nxt.start - b.end < 1.2)
@@ -280,8 +319,11 @@ def format_blocks(blocks: list[Block], recordings: list[Path], context: list[Blo
     return "\n".join(out)
 
 
-def user_prompt(blocks_text: str, broll: list[tuple[str, float]], vocab: dict[str, list[str]]) -> str:
+def user_prompt(blocks_text: str, broll: list[tuple[str, float]], vocab: dict[str, list[str]],
+                outline_text: str = "") -> str:
     parts = []
+    if outline_text:
+        parts.append("STORY OUTLINE (whole episode):\n" + outline_text + "\n")
     if broll:
         parts.append("B-roll files available (filename, length):")
         parts += [f"- {name} ({dur:.0f}s)" for name, dur in broll]
@@ -311,11 +353,32 @@ def plan_without_ai(blocks: list[Block]) -> Plan:
 
 ToolCaller = Callable[..., dict]
 
+FAST_MAX_ON_SCREEN = 20.0
+
+
+def clean_fast(f: dict, ids: set[str], quiet_seconds: dict[str, float]) -> dict | None:
+    """A sane speed-up: real seconds within the quiet stretch, 2-12x, at most 20 s on screen."""
+    bid = f.get("id")
+    if bid not in ids:
+        return None
+    try:
+        secs, speed = float(f.get("seconds", 0)), float(f.get("speed", 4))
+    except (TypeError, ValueError):
+        return None
+    if bid in quiet_seconds:
+        secs = min(secs, quiet_seconds[bid])
+    speed = min(max(speed, 2.0), 12.0)
+    secs = min(secs, FAST_MAX_ON_SCREEN * speed)
+    if secs < 4.0:
+        return None
+    return {"id": bid, "seconds": round(secs, 1), "speed": round(speed, 2), "reason": str(f.get("reason", ""))}
+
 
 def make_plan(blocks: list[Block], recordings: list[Path], cfg: dict, video: dict,
               broll: list[tuple[str, float]], vocab: dict[str, list[str]],
               caller: ToolCaller = llm.call_tool, log=print,
-              notes: dict[str, list[str]] | None = None) -> Plan:
+              notes: dict[str, list[str]] | None = None, measured: dict[str, str] | None = None,
+              outline=None, quiet_seconds: dict[str, float] | None = None) -> Plan:
     window = max(int(cfg["llm"].get("window_blocks", 600)), 50)
     valid = {b.id for b in blocks}
     by_id = {b.id: b for b in blocks}
@@ -323,6 +386,12 @@ def make_plan(blocks: list[Block], recordings: list[Path], cfg: dict, video: dic
     sys_prompt = system_prompt(cfg, video)
     windows = [blocks[i:i + window] for i in range(0, len(blocks), window)] or [[]]
     used_broll: set[str] = set()
+    beats = None
+    outline_text = ""
+    if outline is not None:
+        from kdcut import story
+        beats = story.beat_of(outline, blocks)
+        outline_text = outline.text()
 
     for w_idx, chunk in enumerate(windows):
         if not chunk:
@@ -333,7 +402,8 @@ def make_plan(blocks: list[Block], recordings: list[Path], cfg: dict, video: dic
         remaining_broll = [(n, d) for n, d in broll if n not in used_broll]
         result = caller(
             cfg, sys_prompt,
-            user_prompt(format_blocks(chunk, recordings, context, notes), remaining_broll, vocab),
+            user_prompt(format_blocks(chunk, recordings, context, notes, measured, beats), remaining_broll,
+                        vocab, outline_text),
             "submit_edit", "Submit the edit decision list for these transcript blocks.",
             SCHEMA if cfg["edit"].get("overlays", False) else
             {**SCHEMA, "properties": {k: v for k, v in SCHEMA["properties"].items() if k != "overlays"}},
@@ -347,6 +417,10 @@ def make_plan(blocks: list[Block], recordings: list[Path], cfg: dict, video: dic
         for e in result.get("extend", []):
             if e.get("id") in chunk_ids:
                 plan.extend[e["id"]] = float(min(max(e.get("seconds", 0), 0), 60))
+        for f in result.get("fast", []):
+            item = clean_fast(f, chunk_ids, (quiet_seconds or {}))
+            if item and all(x["id"] != item["id"] for x in plan.fast):
+                plan.fast.append(item)
         broll_names = {n for n, _ in broll}
         for item in result.get("broll", []):
             if item.get("at") in chunk_ids and item.get("file") in broll_names and item["file"] not in used_broll:
@@ -364,6 +438,11 @@ def make_plan(blocks: list[Block], recordings: list[Path], cfg: dict, video: dic
         if "chapter" in b.flags and b.id not in chaptered:
             plan.chapters.append({"at": b.id, "title": "New chapter"})
     plan.chapters.sort(key=lambda c: c["at"])
+    if outline is not None:
+        from kdcut import story
+        kept_setups = story.protect_threads(plan, outline, blocks)
+        if kept_setups:
+            log(f"Kept {len(kept_setups)} set-up block(s) the story needs")
     restored = protect_sentences(plan, blocks)
     if restored:
         log(f"Kept {len(restored)} block(s) whose cut would have split a sentence")

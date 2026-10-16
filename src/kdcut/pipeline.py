@@ -20,6 +20,7 @@ from pathlib import Path
 
 from kdcut import blocks as blocks_mod
 from kdcut import audioprep, captions, graphics, vad, ducking, fcpxml, media, metadata, music, planner, transcribe, vision
+from kdcut import signals as signals_mod, speedup, story
 from kdcut import timelapse as timelapse_mod
 from kdcut.assets import AssetIndex
 from kdcut.blocks import fmt_ts
@@ -185,6 +186,16 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             r.log(f"Footage check skipped: {exc}")
     elif (out / "screen_notes.json").is_file() and use_vision:
         notes = json.loads((out / "screen_notes.json").read_text(encoding="utf-8"))
+    # Where the voice really starts and stops, so cuts don't clip words.
+    voices = {}
+    for src, (rec_path, info) in enumerate(zip(recordings, infos)):
+        if info.audio:
+            mic = media.pick_mic_track(info, cfg["whisper"].get("mic_track", "auto"))
+            got = vad.analyse(Path(rec_path), mic, work, log=r.log)
+            if got:
+                voices[src] = got
+        r.check()
+    durations = [i.duration for i in infos]
     if reuse_plan:
         r.step(2, "AI edit (reusing saved plan)")
         plan = Plan.load(plan_file)
@@ -194,8 +205,33 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         if index:
             vocab = {"sound effect": index.vocabulary("sfx", 100),
                      "overlay": index.vocabulary("overlay", 100)}
+        # How lively each part is (free, measured locally) and the story of the whole episode.
+        measured = signals_mod.Notes()
+        try:
+            sigs = {}
+            for src, (rec_path, info) in enumerate(zip(recordings, infos)):
+                r.check()
+                sigs[src] = signals_mod.measure(Path(rec_path), info, cfg["whisper"].get("mic_track", "auto"),
+                                                work, log=r.log)
+            measured = signals_mod.describe(blocks, sigs, voices, durations)
+        except Cancelled:
+            raise
+        except Exception as exc:     # the numbers help; the edit works without them
+            r.log(f"Footage measurements skipped: {exc}")
+        outline = None
+        try:
+            outline = story.outline(cfg, video, blocks, call, cache=out / "story.json", log=r.log, force=replan)
+        except Cancelled:
+            raise
+        except Exception as exc:
+            r.log(f"Story outline skipped: {exc}")
+        plan_notes = {k: list(v) for k, v in notes.items()}
+        for k, v in signals_mod.as_notes(measured).items():
+            plan_notes.setdefault(k, []).extend(v)
         plan = planner.make_plan(blocks, recordings, cfg, video, broll, vocab, caller=call,
-                                 log=r.log, notes=notes)
+                                 log=r.log, notes=plan_notes, measured=measured.block_tags,
+                                 outline=outline, quiet_seconds=measured.quiet_seconds)
+        notes = plan_notes
         plan.save(plan_file)
     else:
         r.step(2, "Quick edit (spoken cues and pauses only)")
@@ -206,16 +242,6 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     # Packaging (titles, description, cold open) needs the whole kept story, so it is
     # decided now, before the timeline is built. Cached alongside plan.json.
     by_id = {b.id: b for b in blocks}
-    durations = [i.duration for i in infos]
-    # Where the voice really starts and stops, so cuts don't clip words.
-    voices = {}
-    for src, (rec_path, info) in enumerate(zip(recordings, infos)):
-        if info.audio:
-            mic = media.pick_mic_track(info, cfg["whisper"].get("mic_track", "auto"))
-            got = vad.analyse(Path(rec_path), mic, work, log=r.log)
-            if got:
-                voices[src] = got
-        r.check()
     kept_ids = [bid for rng in kept_ranges(blocks, plan, durations, ed, voices) for bid in rng.block_ids]
     want_cold_open = bool(video.get("cold_open", ed.get("cold_open", True)))
     history = music.load_history()
@@ -285,6 +311,32 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     name = video.get("title") or project.name
     prepared: dict[int, timelapse_mod.Prepared] = {}     # id(clip) -> prepared timelapse
     insert_clips: dict[str, list[Clip]] = {}
+    fast_info: dict[int, dict] = {}                      # id(clip) -> the plan's fast item
+    next_block = {}
+    for a, b in zip(blocks, blocks[1:]):
+        if a.source == b.source:
+            next_block[a.id] = b
+    for item in plan.fast:
+        b = by_id.get(item.get("id"))
+        if b is None:
+            continue
+        span = speedup.source_span(b, next_block.get(b.id), float(item["seconds"]), ed,
+                                   plan.extend.get(b.id, 0.0), durations[b.source], voices.get(b.source))
+        if span is None:
+            continue
+        r.check()
+        try:
+            r.log(f"Speeding up {span[1] - span[0]:.0f}s after {b.id} ({item['speed']:g}x)")
+            path, frames = speedup.render(recordings[b.source], span[0], span[1], float(item["speed"]),
+                                          work / "fast" / f"fast_{b.id}.mp4", fps, width, height,
+                                          badge=bool(ed.get("speedup_badge", True)), log=r.log)
+        except media.MediaError as exc:
+            r.log(f"Speed-up after {b.id} skipped: {exc}")
+            continue
+        clip = Clip(path=path, src_in=0, dur=frames, rec=0, role="fast",
+                    name=f"Fast {item['speed']:g}x - {recordings[b.source].stem}")
+        fast_info[id(clip)] = {**item, "real": span[1] - span[0]}
+        insert_clips.setdefault(b.id, []).append(clip)
     n_tl = 0
     for after, items in tl_inserts.items():
         for item in items:
@@ -350,7 +402,15 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     sfx_lane = min(int(tcfg["sfx_lane"]), music_lane - 1)
     cache = Path(cfg["assets"]["cache_dir"]).expanduser() / "converted"
     review: list[str] = []
-    placed = {"broll": 0, "overlay": 0, "sfx": 0, "music": 0, "timelapse": 0}
+    placed = {"broll": 0, "overlay": 0, "sfx": 0, "music": 0, "timelapse": 0, "fast": 0}
+    for clip in tl.main:
+        f = fast_info.get(id(clip))
+        if f is None:
+            continue
+        placed["fast"] += 1
+        tl.markers.append(Marker(rec=clip.rec, name=f"Sped up {f['speed']:g}x", kind="note"))
+        review.append(f"{fmt_ts(tl.seconds(clip.rec))}  Fast-forward {f['speed']:g}x: {f['real']:.0f}s of gameplay "
+                      f"in {tl.seconds(clip.dur):.0f}s" + (f"  ({f['reason']})" if f.get("reason") else ""))
     for clip in tl.main:
         prep = prepared.get(id(clip))
         if prep is None:
@@ -593,7 +653,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         f"- Raw footage: {fmt_ts(raw_total)}  ->  edit: {fmt_ts(final)} "
         f"({100 * final / raw_total:.0f}% kept)" if raw_total else "",
         f"- Clips on the main track: {len(tl.main)}",
-        f"- Placed: {placed['timelapse']} timelapses, {placed['broll']} B-roll, {placed['overlay']} overlays, "
+        f"- Placed: {placed['timelapse']} timelapses, {placed['fast']} fast-forwards, {placed['broll']} B-roll, {placed['overlay']} overlays, "
         f"{placed['sfx']} sound effects",
         f"- Timeline: `{xml_path.name}` ({float(fps):.2f} fps, {width}x{height})", "",
         "## How to open it",

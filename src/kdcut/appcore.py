@@ -141,6 +141,7 @@ def summary_text(result: dict) -> str:
     pct = f" ({100 * final / raw:.0f}% kept)" if raw else ""
     return (f"{fmt_ts(raw)} of footage became a {fmt_ts(final)} video{pct}.\n"
             + (f"Added {p['timelapse']} timelapse(s), " if p.get("timelapse") else "Added ")
+            + (f"{p['fast']} fast-forward(s), " if p.get("fast") else "")
             + f"{p['broll']} B-roll clip(s), {p['overlay']} overlay(s), "
             f"{p['sfx']} sound effect(s) and {p.get('music', 0)} music track(s).")
 
