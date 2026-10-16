@@ -42,6 +42,10 @@ DEFAULTS: dict[str, Any] = {
         "max_block_seconds": 20.0,
         "cold_open": True,         # start with a short teaser of the best moment
         "overlays": False,         # AI-placed item spins / text labels (off: you add graphics yourself)
+        "end_screen": True,        # add an end screen laid out for YouTube's end screen elements
+        "end_screen_seconds": 20,  # YouTube allows 5-20 s
+        "end_screen_pose": "point_side",   # pose from your characters folder
+        "end_screen_labels": ["WATCH NEXT", "MORE {series}"],
     },
     "vision": {
         "enabled": False,          # let the AI look at frames from quiet stretches

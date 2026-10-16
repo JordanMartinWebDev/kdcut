@@ -1063,6 +1063,11 @@ class MainWindow(QMainWindow):
         self.cold_open.setToolTip("Cold open: a few seconds of the best moment before the intro, in black and white "
                                   "with 'COMING UP' on screen and a quick flash into the episode.")
         self.cold_open.setChecked(bool(config.load()["edit"].get("cold_open", True)))
+        self.end_screen = QCheckBox("Add an end screen")
+        self.end_screen.setToolTip("The last 20 seconds: your character pointing at two 'watch next' spots and a "
+                                   "subscribe circle. Add the elements once in YouTube Studio, then use "
+                                   "'Import from video' for every new upload.")
+        self.end_screen.setChecked(bool(config.load()["edit"].get("end_screen", True)))
         self.fresh = QCheckBox("Start over (redo transcription and AI edit)")
         self.fresh.setToolTip("Normally re-running keeps the transcript and the AI's decisions so it's fast.")
         self.vision = QCheckBox("Let the AI look at the footage")
@@ -1074,6 +1079,8 @@ class MainWindow(QMainWindow):
         opts.addWidget(self.vision)
         opts.addSpacing(20)
         opts.addWidget(self.cold_open)
+        opts.addSpacing(20)
+        opts.addWidget(self.end_screen)
         opts.addSpacing(20)
         opts.addWidget(self.fresh)
         opts.addStretch(1)
@@ -1199,6 +1206,7 @@ class MainWindow(QMainWindow):
     def video_info(self, proj: appcore.Project) -> dict:
         return {"title": proj.name, "topic": proj.topic, "series": proj.series, "episode": proj.episode,
                 "screenshots": proj.screenshots, "cold_open": self.cold_open.isChecked(),
+                "end_screen": self.end_screen.isChecked(),
                 "vision": self.vision.isChecked()}
 
     def refresh_ready(self):
@@ -1275,6 +1283,7 @@ class MainWindow(QMainWindow):
         settings = config.load_settings()   # remember the per-video switches for next time
         settings.setdefault("vision", {})["enabled"] = self.vision.isChecked()
         settings.setdefault("edit", {})["cold_open"] = self.cold_open.isChecked()
+        settings["edit"]["end_screen"] = self.end_screen.isChecked()
         config.save_settings(settings)
 
         def work():

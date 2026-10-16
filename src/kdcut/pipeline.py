@@ -399,6 +399,19 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         if "highlight" in b.flags and b.id in starts:
             tl.markers.append(Marker(rec=starts[b.id], name="Highlight (you said 'clip that')", kind="note"))
 
+    # End screen: the last seconds, laid out for YouTube's end screen elements. Added before
+    # the music so the music bed plays under it.
+    end_screen, es_secs = None, 0.0
+    if bool(video.get("end_screen", ed.get("end_screen", True))) and tl.main:
+        try:
+            end_screen, es_secs = _add_end_screen(tl, cfg, video, out, work, width, height, index, log=r.log)
+            rec = tl.main[-1].rec
+            tl.markers.append(Marker(rec=rec, name="End screen (add the elements in YouTube Studio)", kind="note"))
+            review.append(f"{fmt_ts(tl.seconds(rec))}  End screen ({es_secs:.0f}s): "
+                          + ", ".join(end_screen.labels) + " + subscribe")
+        except Exception as exc:  # a bonus; never lose the edit over it
+            r.log(f"End screen skipped: {exc}")
+
     # Background music on its own track (A3), after the teaser.
     if library:
         music_start = tl.seconds(teaser.rec_end) if teaser else 0.0
@@ -497,6 +510,9 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     if review:
         report += ["## What was added (timeline time)", *[f"- {r}" for r in review], ""]
     report += [f"## What was cut ({len(cut_lines)} pieces, besides silences)", *cut_lines, ""]
+    if end_screen is not None:
+        from kdcut import endscreen
+        report += ["## End screen", *[f"- {s}" for s in endscreen.studio_steps(end_screen, es_secs)], ""]
     (out / "review.md").write_text("\n".join(report), encoding="utf-8")
 
     yt_chapters = metadata.youtube_chapters(chapter_times, final)
@@ -533,9 +549,43 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             r.log(f"Thumbnails skipped: {exc}")
 
     return {"timeline": xml_path, "final_seconds": final, "raw_seconds": raw_total,
+            "end_screen": end_screen.image if end_screen else None, "end_screen_seconds": es_secs,
             "placed": placed, "plan": plan, "clips": len(tl.main), "out_dir": out,
             "review": out / "review.md", "upload_kit": out / "upload_kit.md",
             "thumbnails": thumbs}
+
+
+END_SCREEN_POSES = ("point_side", "presenting", "point_viewer", "wave")
+
+
+def _add_end_screen(tl, cfg: dict, video: dict, out: Path, work: Path, width: int, height: int,
+                    index: AssetIndex | None, log=print):
+    """Render the end screen and append it to the main track. Returns (EndScreen, seconds)."""
+    from kdcut import endscreen, thumbnails
+    ed = cfg["edit"]
+    secs = min(max(float(ed.get("end_screen_seconds", 20)), 5.0), 20.0)   # YouTube allows 5-20 s
+    last = tl.main[-1]
+    frame: Path | None = work / "end_screen_frame.jpg"
+    try:
+        media.extract_frame(last.path, max(tl.seconds(last.src_in + last.dur) - 0.5, 0.0), frame)
+    except media.MediaError:
+        frame = None
+    series = video.get("series") or ""
+    theme = thumbnails.Theme.load(thumbnails.theme_path(cfg, series)) or thumbnails.Theme()
+    chars = {p.stem: p for p in thumbnails.list_characters(cfg)}
+    poses, style = thumbnails.pose_library(cfg)
+    want = str(ed.get("end_screen_pose") or "")
+    pose = want if want in chars else next((n for n in END_SCREEN_POSES if n in chars), next(iter(chars), None))
+    fonts = thumbnails.font_assets(index)
+    es = endscreen.render(out / "end_screen.png", width, height, frame=frame, theme=theme, series=series,
+                          character=chars.get(pose) if pose else None,
+                          faces=poses.get(pose, thumbnails.PoseInfo()).faces if pose else "left",
+                          glow=str(style.get("glow") or ""), labels=ed.get("end_screen_labels"),
+                          font_path=fonts.get(theme.font))
+    tl.main.append(Clip(path=es.image, src_in=0, dur=tl.frames(secs), rec=tl.duration,
+                        role="end_screen", name="End screen", is_image=True))
+    log(f"Added a {secs:.0f}s end screen" + (f" with the '{pose}' pose" if pose else ""))
+    return es, secs
 
 
 def make_thumbnails(out: Path, cfg: dict, video: dict, screenshots: list[Path], use_ai: bool,
