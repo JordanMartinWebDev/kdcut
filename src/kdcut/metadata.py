@@ -77,7 +77,7 @@ def youtube_chapters(chapters: list[tuple[float, str]], total: float) -> list[tu
     return out if len(out) >= 3 else []
 
 
-RULES_VERSION = 5     # bump when these rules change, so saved packaging is redone
+RULES_VERSION = 6     # bump when these rules change, so saved packaging is redone
 
 COLD_OPEN_RULES = (
     "Also pick a cold open: a 4-10 second teaser shown at the very start (in black and white with "
