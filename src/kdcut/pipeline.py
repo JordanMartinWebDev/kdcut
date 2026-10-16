@@ -239,6 +239,12 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         plan.blocks_key = planner.blocks_key(blocks)
         plan.save(plan_file)
 
+    # Short cut bits said in one breath with kept talk can't be cut cleanly: keep them.
+    # (Applied on every run, so saved plans benefit too.)
+    glued = planner.protect_joins(plan, blocks, voices)
+    if glued:
+        r.log(f"Kept {len(glued)} short bit(s) that couldn't be cut cleanly")
+
     # Packaging (titles, description, cold open) needs the whole kept story, so it is
     # decided now, before the timeline is built. Cached alongside plan.json.
     by_id = {b.id: b for b in blocks}
@@ -589,6 +595,9 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             rng_tracks = sorted(library, key=lambda t: history.get(t.path, 0))
             raw = [(s, [rng_tracks[i % len(rng_tracks)]], "") for i, s in enumerate(cue_starts)]
         raw.sort(key=lambda x: x[0])
+        # Talking on the finished timeline (also used for ducking below).
+        speech = [(tl.seconds(starts[b]), tl.seconds(ends[b])) for b in starts] + vo_spans
+        raw = music.tidy_cues(raw, speech, music_start, total)
         cues = [music.Cue(s, raw[i + 1][0] if i + 1 < len(raw) else total, tr, why)
                 for i, (s, tr, why) in enumerate(raw)]
         pieces = [pc for pc in music.fill(cues, library, history, seed=len(blocks)) if pc.length >= 2]
@@ -603,7 +612,6 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         bed = None
         if pieces and mcfg.get("duck", True):
             # One pre-mixed music bed that dips under your voice.
-            speech = [(tl.seconds(starts[b]), tl.seconds(ends[b])) for b in starts] + vo_spans
             gains = ducking.envelope(speech, total, talk_db=talk_db, gap_db=gap_db)
             try:
                 r.log("Mixing the music so it dips while you talk")

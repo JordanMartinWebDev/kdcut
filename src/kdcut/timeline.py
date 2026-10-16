@@ -116,7 +116,11 @@ def kept_ranges(blocks: list[Block], plan: Plan, durations: list[float], edit: d
         for i, b in enumerate(src_blocks):
             if is_dropped(b):
                 if cur:
-                    cur.end = min(cur.end, max(onset(b.start), cur_spoken_end))
+                    prev = src_blocks[i - 1] if i > 0 else None
+                    if v and prev is not None and not is_dropped(prev) and b.start - prev.end < 1.0:
+                        cur.end = min(cur.end, max(v.cut_between(prev.end, b.start)[0], cur.start + 0.1))
+                    else:
+                        cur.end = min(cur.end, max(onset(b.start), cur_spoken_end))
                     ranges.append(cur)
                     cur = None
                 continue
@@ -125,6 +129,10 @@ def kept_ranges(blocks: list[Block], plan: Plan, durations: list[float], edit: d
             # Real end of the cut words before this block, but never past where this block starts.
             prev_end = 0.0 if prev is None else (
                 min(offset(prev.end), max(prev.end, b.start - 0.05)) if is_dropped(prev) else prev.end)
+            if v and prev is not None and is_dropped(prev) and b.start - prev.end < 1.0:
+                # Cut talk right before this block: start in the quiet moment between them,
+                # not where Whisper's word timings happen to put the boundary.
+                prev_end = min(v.cut_between(prev.end, b.start)[0], b.start)
             # A block can hold a long wait between words ("all ... right"); treat each side
             # as its own piece so the wait is trimmed like any other pause.
             pieces, at = [], b.start
@@ -145,7 +153,14 @@ def kept_ranges(blocks: list[Block], plan: Plan, durations: list[float], edit: d
                 if not last:
                     e = min(e, max(pieces[k + 1][0], real_end))
                 elif nxt is not None and is_dropped(nxt):
-                    e = min(e, max(onset(nxt.start), real_end))
+                    if v and nxt.start - p_end < 1.0:
+                        # The next words are cut: stop in the quiet moment before them. (The
+                        # voice can run straight on, so where it "stops" may be inside them.)
+                        cut = max(v.cut_between(p_end, nxt.start)[0], p_start + 0.1)
+                        e = min(e, cut)
+                        real_end = min(real_end, cut)
+                    else:
+                        e = min(e, max(onset(nxt.start), real_end))
                 e = min(e, limit)
                 ends_here = cur is not None and cur.block_ids[-1] in break_after and cur.block_ids[-1] != b.id
                 if cur and s - cur.end <= max_pause and not ends_here:
