@@ -41,6 +41,27 @@ def blocks_key(blocks: list[Block]) -> str:
     return hashlib.sha1(sig.encode("utf-8")).hexdigest()[:16]
 
 
+def _words(text: str) -> list[str]:
+    import re
+    return re.findall(r"[a-z0-9']+", text.lower())
+
+
+def is_restart(cut_text: str, next_text: str, near: int = 8) -> bool:
+    """True when `next_text` starts over what `cut_text` said (a retake): "right i got
+    myself a couple pieces of food" followed by "all right i got myself a couple pieces of
+    food now...". Most of the cut words come back, in order, near the start of the next block."""
+    import difflib
+    cut = _words(cut_text)[-25:]
+    nxt = _words(next_text)
+    if len(cut) < 3 or not nxt:
+        return False
+    sm = difflib.SequenceMatcher(None, cut, nxt[:len(cut) + near], autojunk=False)
+    hits = [m for m in sm.get_matching_blocks() if m.size]
+    if not hits or hits[0].b > near:
+        return False
+    return sum(m.size for m in hits) >= max(3, 0.6 * len(cut))
+
+
 def protect_sentences(plan: Plan, blocks: list[Block], joined: float = 1.2) -> list[str]:
     """Undo cuts that would split a sentence: a run of dropped blocks may only start right
     after a finished sentence (or a real pause) and end on one. Returns what was restored."""
@@ -69,6 +90,9 @@ def protect_sentences(plan: Plan, blocks: list[Block], joined: float = 1.2) -> l
                          and not ends_sentence(prev.text) and first.start - prev.end < joined)
             bad_end = (nxt is not None and "forced_drop" not in nxt.flags and not nxt.cue
                        and not ends_sentence(last.text) and nxt.start - last.end < joined)
+            if (bad_start or bad_end) and nxt is not None and is_restart(
+                    " ".join(b.text for b in src_blocks[i:j + 1]), nxt.text):
+                bad_start = bad_end = False     # a false start: the next block says it again
             if bad_start or bad_end:
                 for b in src_blocks[i:j + 1]:
                     plan.drop.pop(b.id, None)

@@ -36,6 +36,19 @@ SCHEMA = {
             },
             "required": ["id", "start_words", "end_words", "reason"],
         },
+        "cold_open_backups": {
+            "type": "array", "maxItems": 2,
+            "description": "Only when a cold open is asked for: 1-2 next-best teaser moments "
+                           "(different blocks, same fields as cold_open), used if the first pick "
+                           "turns out too dark to see.",
+            "items": {"type": "object", "properties": {
+                "id": {"type": "string"}, "start_words": {"type": "string"},
+                "end_words": {"type": "string"},
+                "lead_in": {"type": "number", "minimum": 0, "maximum": 3},
+                "seconds": {"type": "number", "minimum": 3, "maximum": 12},
+                "reason": {"type": "string"}},
+                "required": ["id", "start_words", "end_words", "reason"]},
+        },
     },
     "required": ["titles", "description", "tags", "thumbnail_text", "thumbnail_moments"],
 }
@@ -49,6 +62,7 @@ class Metadata:
     thumbnail_text: list[str] = field(default_factory=list)
     thumbnail_moments: list[str] = field(default_factory=list)
     cold_open: dict | None = None
+    cold_open_backups: list[dict] = field(default_factory=list)
     music: list[dict] = field(default_factory=list)
 
 
@@ -63,7 +77,7 @@ def youtube_chapters(chapters: list[tuple[float, str]], total: float) -> list[tu
     return out if len(out) >= 3 else []
 
 
-RULES_VERSION = 2     # bump when these rules change, so saved packaging is redone
+RULES_VERSION = 3     # bump when these rules change, so saved packaging is redone
 
 COLD_OPEN_RULES = (
     "Also pick a cold open: a 4-10 second teaser shown at the very start (in black and white with "
@@ -72,6 +86,9 @@ COLD_OPEN_RULES = (
     "disaster, a boss or big fight, or the creator's biggest reaction (shouting, 'no way', "
     "'dude'). Prefer the second half. It must be instantly understandable with no context.\n"
     "Never pick walking, travelling, mining, crafting, setup, explanations or calm talk.\n"
+    "Viewers must be able to SEE it: avoid moments in dark caves or at night with no light "
+    "(check the [on screen] notes); a lit fight beats a pitch-black one. Also list 1-2 "
+    "backup moments in cold_open_backups.\n"
     "Pick the exact words: start_words where the excitement starts (skip any 'oh', 'um' or "
     "pause before it) and end_words at the peak of the reaction, before it is resolved or "
     "explained, so viewers stay to see it. Use lead_in when the picture matters before the "
@@ -113,6 +130,7 @@ def generate(cfg: dict, video: dict, kept: list[Block], caller=llm.call_tool,
     md = Metadata(**{k: res.get(k, v) for k, v in Metadata().__dict__.items()})
     if not cold_open:
         md.cold_open = None
+        md.cold_open_backups = []
     return md
 
 
