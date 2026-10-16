@@ -39,7 +39,7 @@ class EndScreenTests(unittest.TestCase):
         es = endscreen.render(self.tmp / "es.png", 1280, 720, labels=["WATCH NEXT", "MORE {series}"])
         self.assertEqual(es.labels, ["WATCH NEXT", "MORE VIDEOS"])
         self.assertEqual(Image.open(es.image).size, (1280, 720))
-        self.assertEqual(es.slots[0], (66, 100, 469, 264))       # scaled with the frame
+        self.assertEqual(es.slots[0], (128, 113, 384, 216))      # scaled with the frame
 
     def test_slots_are_empty_and_character_stays_off_the_circle(self):
         es = self.render()
@@ -89,3 +89,18 @@ class EndScreenTests(unittest.TestCase):
         info = media.probe(out)
         self.assertEqual((info.width, info.height), (640, 360))
         self.assertAlmostEqual(info.duration, 4.0, delta=0.1)
+
+
+class SafeAreaTests(unittest.TestCase):
+    def test_boxes_stay_where_youtube_can_put_elements(self):
+        # Inner ~80% of the frame; the editor stopped the bottom element ~85% down; a video
+        # element is at most about 613x345 at 1080p.
+        for x, y, w, h in endscreen.SLOTS:
+            self.assertGreaterEqual(x, 192)
+            self.assertGreaterEqual(y, 108)
+            self.assertLessEqual(y + h, 900)
+            self.assertLessEqual(w, 613)
+            self.assertAlmostEqual(w / h, 16 / 9, places=2)
+        x, y, w, h = endscreen.SUBSCRIBE
+        self.assertEqual(w, h)
+        self.assertLessEqual(y + h, 972)
