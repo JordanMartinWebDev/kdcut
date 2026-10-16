@@ -610,7 +610,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         raw.sort(key=lambda x: x[0])
         # Talking on the finished timeline (also used for ducking below).
         speech = [(tl.seconds(starts[b]), tl.seconds(ends[b])) for b in starts] + vo_spans
-        raw = music.tidy_cues(raw, speech, music_start, total)
+        raw = music.tidy_cues(music.from_the_start(raw, music_start), speech, music_start, total)
         if scary:
             # Scary/heavy music only where the story outline says it's dangerous.
             outline = story.cached(out / "story.json", blocks)

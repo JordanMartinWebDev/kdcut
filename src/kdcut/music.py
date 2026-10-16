@@ -296,6 +296,18 @@ MIN_SECTION = 90.0      # a song plays at least this long before the music chang
 SHIFT = 10.0            # how far a change may move to land in a pause
 
 
+def from_the_start(raw: list[tuple], start: float, slack: float = 3.0) -> list[tuple]:
+    """Music plays from the start of the episode (right after the cold open). If the first
+    song the AI picked comes later, it starts at the beginning instead. A deliberate silence
+    at the start (an empty first cue) is left alone."""
+    if not raw:
+        return raw
+    t, tracks, why = raw[0]
+    if tracks and t > start + slack:
+        return [(start, tracks, why), *raw[1:]]
+    return raw
+
+
 def tidy_cues(raw: list[tuple], speech: list[tuple[float, float]], start: float, total: float,
               min_section: float = MIN_SECTION, shift: float = SHIFT) -> list[tuple]:
     """Make the AI's music changes land well.
@@ -431,7 +443,8 @@ RULES = (
     "mood, energy and genre; tracks marked [no mood tags] are unknown, so use them only when "
     "nothing tagged fits. "
     "Change music when the mood changes, usually at chapter boundaries, and let each song play at "
-    "least a couple of minutes; never change in the first minute after the intro. Leave music "
+    "least a couple of minutes. The first cue must be at the first block, so music plays from the "
+    "start; don't change it again in the first minute. Leave music "
     "out where silence is stronger (a scary moment, a big reveal, an emotional beat). Avoid "
     "tracks marked (used recently) so episodes don't all sound the same."
 )

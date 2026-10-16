@@ -44,6 +44,18 @@ class FeelTests(unittest.TestCase):
         self.assertIn("[no mood tags]", lines[1])
 
 
+class StartTests(unittest.TestCase):
+    def test_music_starts_right_after_the_cold_open(self):
+        raw = [(146.0, [HAPPY], "day one"), (302.0, [SKY], "cave")]
+        out = music.from_the_start(raw, 8.7)
+        self.assertEqual(out[0][0], 8.7)
+        self.assertEqual(out[1][0], 302.0)
+
+    def test_deliberate_silence_at_the_start_stays(self):
+        raw = [(30.0, [], "let the intro breathe"), (90.0, [HAPPY], "")]
+        self.assertEqual(music.from_the_start(raw, 8.7), raw)
+
+
 class SpecialTests(unittest.TestCase):
     def test_scary_pick_outside_danger_is_swapped(self):
         cues = [(0.0, [HAPPY], "intro"), (200.0, [SHE, SEA], "looking for a cave"), (400.0, [SEA], "skeleton chase")]
