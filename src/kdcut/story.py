@@ -139,6 +139,17 @@ def outline(cfg: dict, video: dict, blocks: list[Block], caller, cache: Path | N
     return o
 
 
+def cached(cache: Path, blocks: list[Block]) -> Outline | None:
+    """The saved outline for these blocks, or None (never calls the AI)."""
+    try:
+        data = json.loads(cache.read_text(encoding="utf-8"))
+        if data.get("key") == key(blocks):
+            return Outline(**data["outline"])
+    except (OSError, json.JSONDecodeError, TypeError, KeyError):
+        pass
+    return None
+
+
 def protect_threads(plan, outline: Outline, blocks: list[Block]) -> list[str]:
     """Undo cuts of a setup whose payoff stays in the video. Returns the restored ids."""
     restored = []
