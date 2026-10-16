@@ -698,8 +698,12 @@ def _add_end_screen(tl, cfg: dict, video: dict, out: Path, work: Path, width: in
     secs = min(max(float(ed.get("end_screen_seconds", 20)), 5.0), 20.0)   # YouTube allows 5-20 s
     last = tl.main[-1]
     frame: Path | None = work / "end_screen_frame.jpg"
+    # The episode's very last frame, so the animated end screen grows out of it seamlessly.
+    # (A timelapse ends on its dip to black: take a frame from before the dip instead.)
+    ends_dark = last.role == "timelapse" and ed.get("timelapse_transition", "dip") == "dip"
+    back = 0.5 if ends_dark else 2 / float(tl.fps)
     try:
-        media.extract_frame(last.path, max(tl.seconds(last.src_in + last.dur) - 0.5, 0.0), frame)
+        media.extract_frame(last.path, max(tl.seconds(last.src_in + last.dur) - back, 0.0), frame)
     except media.MediaError:
         frame = None
     series = video.get("series") or ""
@@ -714,9 +718,24 @@ def _add_end_screen(tl, cfg: dict, video: dict, out: Path, work: Path, width: in
                           faces=poses.get(pose, thumbnails.PoseInfo()).faces if pose else "left",
                           glow=str(style.get("glow") or ""), labels=ed.get("end_screen_labels"),
                           font_path=fonts.get(theme.font))
-    tl.main.append(Clip(path=es.image, src_in=0, dur=tl.frames(secs), rec=tl.duration,
-                        role="end_screen", name="End screen", is_image=True))
-    log(f"Added a {secs:.0f}s end screen" + (f" with the '{pose}' pose" if pose else ""))
+    clip_path, still = es.image, True
+    if bool(ed.get("end_screen_motion", True)) and es.layers is not None:
+        import hashlib
+        from PIL import Image
+        if ends_dark:
+            es.layers.sharp = Image.new("RGB", (width, height), (0, 0, 0))
+        sig = hashlib.sha1(es.image.read_bytes() + f"|{secs}|{tl.fps}|{ends_dark}|m1".encode()).hexdigest()[:12]
+        video_file = work / f"end_screen_{sig}.mp4"
+        try:
+            if not video_file.is_file():
+                log("Animating the end screen")
+                endscreen.animate(es.layers, video_file, secs, tl.fps, log=log)
+            clip_path, still, es.video = video_file, False, video_file
+        except Exception as exc:          # the still version is a fine fallback
+            log(f"Kept the end screen still (couldn't animate it: {exc})")
+    tl.main.append(Clip(path=clip_path, src_in=0, dur=tl.frames(secs), rec=tl.duration,
+                        role="end_screen", name="End screen", is_image=still))
+    log(f"Added a {secs:.0f}s {'still ' if still else ''}end screen" + (f" with the '{pose}' pose" if pose else ""))
     return es, secs
 
 

@@ -63,3 +63,29 @@ class EndScreenTests(unittest.TestCase):
     def test_pose_choice_falls_back(self):
         self.assertEqual(pipeline.END_SCREEN_POSES[0], "point_side")
         self.assertEqual(config.DEFAULTS["edit"]["end_screen_seconds"], 20)
+
+    def test_animated_end_screen_settles_on_the_layout(self):
+        import shutil
+        if not shutil.which("ffmpeg"):
+            self.skipTest("needs ffmpeg")
+        from kdcut import media
+        es = endscreen.render(self.tmp / "es.png", 640, 360, frame=self.frame, theme=thumbnails.Theme(),
+                              series="Survival Kingdom", character=self.pose)
+        L = es.layers
+        first = endscreen.frame_at(L, 0.0, 4.0).convert("RGB")
+        self.assertEqual(first.getpixel((10, 10)), (40, 160, 60))        # starts on the episode's last frame
+        a = endscreen.frame_at(L, 2.0, 4.0).convert("RGB")
+        b = endscreen.frame_at(L, 3.0, 4.0).convert("RGB")
+        still = Image.open(es.image).convert("RGB")
+        for x, y, w, h in es.slots:                                       # boxes hold still, where YouTube puts them
+            box = (x + 6, y + 6, x + w - 6, y + h // 2)
+            self.assertLess(max(a.crop(box).convert("L").getextrema()), 60)
+            self.assertEqual(a.crop((x - 2, y + h // 2, x + 2, y + h // 2 + 1)).tobytes(),
+                             still.crop((x - 2, y + h // 2, x + 2, y + h // 2 + 1)).tobytes())
+        self.assertNotEqual(a.tobytes(), b.tobytes())                     # but the screen keeps moving
+        end = endscreen.frame_at(L, 3.99, 4.0).convert("L")
+        self.assertLess(max(end.getextrema()), 30)                        # fades out at the very end
+        out = endscreen.animate(L, self.tmp / "es.mp4", 4.0, 30)
+        info = media.probe(out)
+        self.assertEqual((info.width, info.height), (640, 360))
+        self.assertAlmostEqual(info.duration, 4.0, delta=0.1)

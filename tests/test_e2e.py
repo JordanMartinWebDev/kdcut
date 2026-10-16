@@ -315,8 +315,10 @@ class EndToEnd(unittest.TestCase):
         from PIL import Image
         root = ET.fromstring(self.xml.split("<!DOCTYPE fcpxml>", 1)[1])
         last = list(root.find(".//sequence/spine"))[-1]
-        self.assertEqual(last.tag, "video")
+        self.assertEqual(last.tag, "asset-clip")         # animated: a video clip, not a still
         self.assertEqual(last.get("name"), "End screen")
+        ref = root.find(f".//asset[@id='{last.get('ref')}']/media-rep").get("src")
+        self.assertTrue(ref.endswith(".mp4"))
         dur = Fraction(last.get("duration").rstrip("s"))
         self.assertAlmostEqual(float(dur), 20.0, places=1)
         self.assertEqual(self.result["end_screen_seconds"], 20.0)
@@ -330,7 +332,7 @@ class EndToEnd(unittest.TestCase):
         root = ET.fromstring(self.xml.split("<!DOCTYPE fcpxml>", 1)[1])
         spine = list(root.find(".//sequence/spine"))
         for main in spine:
-            if main.tag != "asset-clip":     # the end screen still
+            if main.tag != "asset-clip" or main.get("name") == "End screen":
                 continue
             self.assertEqual(main.get("srcEnable"), "video")
             kids = {c.get("lane"): c for c in main if c.tag == "asset-clip"}
