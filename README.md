@@ -47,7 +47,20 @@ thumbnails using:
 - **2–4 punchy words** with a thick outline, plus one word in the series' accent colour
 - **your character**: transparent PNG poses of your skin. Set the folder in Settings, and name
   files by mood (`waving.png`, `thinking.png`, `shocked.png`) so the AI picks the right one.
-  Brazey's Emote Generator can make 70 poses from your skin.
+  Optionally add a `poses.json` beside them:
+
+  ```json
+  {
+    "_style": {"glow": "#FFC440"},
+    "shocked": {"mood": "hands up beside the face; surprise, danger, a big reveal", "faces": "left"},
+    "victory": {"mood": "fist in the air; won, finished, beat the boss", "faces": "left"}
+  }
+  ```
+
+  `mood` tells the AI when to use each pose, `faces` (left / right / front) is which way the
+  character looks in the PNG so KDcut can flip it toward the words, and `_style.glow` adds a
+  soft brand-coloured halo behind the character (a series theme's `character_glow` overrides it).
+  Files starting with `_` are ignored.
 - **one or two item icons** from your packs, when they tell the story
 - a **ring and arrow** on the key thing in the screenshot, when there is one
 - **series branding**: your series logo (the **Series logo…** button), episode badge, and
