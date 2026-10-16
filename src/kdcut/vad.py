@@ -68,7 +68,35 @@ class Voice:
             i -= 1
         return t            # nothing voiced nearby (a quiet word): trust Whisper
 
-    def onset_before(self, t: float, limit: float = 0.4, quiet: float = 0.1) -> float:
+    def cut_between(self, a_end: float, b_start: float, before: float = 0.15,
+                    after: float = 0.1) -> tuple[float, bool]:
+        """The best place to cut between one stretch of talk ending (Whisper says a_end) and
+        the next starting (b_start): the middle of the longest quiet moment around the
+        boundary. Returns (time, clean); clean is False when the voice never stops there
+        (one breath, e.g. "...that new world feeling let's go"), and the time is then the
+        quietest instant."""
+        lo = min(a_end, b_start) - before
+        hi = b_start + after
+        i0, i1 = self._i(max(lo, 0.0)), self._i(hi)
+        if not self.levels or i1 <= i0:
+            return b_start, True
+        best, run_start = (0, i0), None
+        for i in range(i0, i1 + 1):
+            quiet = self.levels[i] <= self.threshold
+            if quiet and run_start is None:
+                run_start = i
+            if run_start is not None and (not quiet or i == i1):
+                end = i if not quiet else i + 1
+                if end - run_start > best[0]:
+                    best = (end - run_start, run_start)
+                run_start = None
+        length, start = best
+        if length * STEP >= 0.06:
+            return (start + length / 2) * STEP, True
+        k = min(range(i0, i1 + 1), key=lambda i: self.levels[i])
+        return k * STEP, False
+
+    def onset_before(self, t: float, limit: float = 0.8, quiet: float = 0.1) -> float:
         """If the voice had already started before t, where it really starts."""
         if not self.levels or not any(self.on(t + k * STEP) for k in range(-3, 3)):
             return t

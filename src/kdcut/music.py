@@ -240,6 +240,53 @@ def _similar(track: Track, pool: list[Track]) -> list[Track]:
     return sorted(pool, key=lambda t: -len(words & t.words))
 
 
+MIN_SECTION = 90.0      # a song plays at least this long before the music changes
+SHIFT = 10.0            # how far a change may move to land in a pause
+
+
+def tidy_cues(raw: list[tuple], speech: list[tuple[float, float]], start: float, total: float,
+              min_section: float = MIN_SECTION, shift: float = SHIFT) -> list[tuple]:
+    """Make the AI's music changes land well.
+
+    - No section shorter than `min_section`: a change that comes too soon after the last one
+      is dropped (the earlier music keeps playing), so the music doesn't flip every minute.
+    - Each change moves to the nearest pause in the talking (within `shift` seconds), so a
+      new song never starts mid-sentence or right on a jump cut while you talk.
+    `raw` is [(start seconds, tracks, why)], sorted; returns the same shape."""
+    from kdcut.ducking import merge
+    talk = merge(speech, gap=0.6)
+    gaps = []
+    prev_end = start
+    for a, b in talk:
+        if a - prev_end >= 1.0:
+            gaps.append((prev_end, a))
+        prev_end = max(prev_end, b)
+    if total - prev_end >= 1.0:
+        gaps.append((prev_end, total))
+
+    def in_pause(t: float) -> float:
+        for a, b in gaps:
+            if a <= t <= b:
+                return t                      # already in a pause
+        best = None
+        for a, b in gaps:
+            cand = a + min(0.3, (b - a) / 2)  # just after the last word
+            if abs(cand - t) <= shift and (best is None or abs(cand - t) < abs(best - t)):
+                best = cand
+        return best if best is not None else t
+
+    out: list[tuple] = []
+    for t, tracks, why in raw:
+        t = max(t, start)
+        if out:
+            t = in_pause(t)
+            # A deliberate silence (a scare, a reveal) is kept even when it comes soon.
+            if tracks and (t - out[-1][0] < min_section or total - t < min_section / 3):
+                continue
+        out.append((t, tracks, why))
+    return out
+
+
 def fill(cues: list[Cue], library: list[Track], history: dict[str, float],
          seed: int = 0, min_piece: float = 8.0) -> list[Placement]:
     """Turn cues into concrete clips. A section longer than its track continues with a
@@ -289,10 +336,15 @@ SCHEMA_PART = {
 }
 
 RULES = (
-    "Pick background music from the creator's library. Match the mood of each part of the video "
-    "(calm/cozy for building and farming, adventurous for exploring, tense for caves, fights and "
-    "low health, upbeat for the intro, playful for funny moments). Change music when the mood "
-    "changes, usually at chapter boundaries, not more than every couple of minutes. Leave music "
+    "Pick background music from the creator's library. Match the mood of each part of the video: "
+    "calm/cozy for building and farming; adventurous or curious for exploring, travelling and "
+    "ordinary caving and mining (looking for a cave, strip mining, finding ores is an adventure, "
+    "not a horror film); upbeat for the intro; playful for funny moments; action for fights and "
+    "escapes. Keep dark, eerie, horror or 'scary' tracks for places that really are frightening: "
+    "the deep dark and ancient cities, being hunted at night, very low health, the dangerous "
+    "Nether. Judge by the title, artist and tags. "
+    "Change music when the mood changes, usually at chapter boundaries, and let each song play at "
+    "least a couple of minutes; never change in the first minute after the intro. Leave music "
     "out where silence is stronger (a scary moment, a big reveal, an emotional beat). Avoid "
     "tracks marked (used recently) so episodes don't all sound the same."
 )
@@ -315,7 +367,7 @@ MOODS = [
      {"sad", "dark", "low"}),
     ("Funny", "fails, silly moments, bits",
      {"funny", "quirky", "eccentric", "silly", "cartoon", "comedy", "playful", "sneaky"}, set()),
-    ("Tense", "caves, the Nether, low health, night",
+    ("Tense", "the deep dark, being hunted, low health",
      {"dark", "mysterious", "suspense", "scary", "tense", "weird", "horror", "thriller", "mystery", "creepy",
       "eerie", "drone"}, set()),
     ("Action", "fights, boss battles, raids, escapes",

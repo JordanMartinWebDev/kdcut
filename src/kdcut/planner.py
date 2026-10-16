@@ -105,6 +105,49 @@ def protect_sentences(plan: Plan, blocks: list[Block], joined: float = 1.2) -> l
     return restored
 
 
+def protect_joins(plan: Plan, blocks: list[Block], voices: dict, max_seconds: float = 2.5,
+                  near: float = 1.0) -> list[str]:
+    """Keep short cut fragments that can't be cut cleanly. When the creator says two things
+    in one breath ("oh baby, that new world feeling, let's go"), there's no silence between
+    them, so cutting the second part leaves a chopped word. Two extra words are far better
+    than a glitchy cut. Retakes ("right I got..." / "all right I got...") still go: there the
+    repeat matters more than a slightly tight cut."""
+    restored = []
+    by_src: dict[int, list[Block]] = {}
+    for b in blocks:
+        by_src.setdefault(b.source, []).append(b)
+    for src, bl in by_src.items():
+        v = voices.get(src)
+        if v is None:
+            continue
+        i = 0
+        while i < len(bl):
+            if bl[i].id not in plan.drop or "forced_drop" in bl[i].flags:
+                i += 1
+                continue
+            j = i
+            while j + 1 < len(bl) and bl[j + 1].id in plan.drop and "forced_drop" not in bl[j + 1].flags:
+                j += 1
+            run, prev = bl[i:j + 1], (bl[i - 1] if i > 0 else None)
+            nxt = bl[j + 1] if j + 1 < len(bl) else None
+            talk = sum(b.duration for b in run)
+            text = " ".join(b.text for b in run)
+            glued = False
+            if prev is not None and prev.id not in plan.drop and run[0].start - prev.end < near:
+                glued |= not v.cut_between(prev.end, run[0].start)[1]
+            if nxt is not None and nxt.id not in plan.drop and nxt.start - run[-1].end < near:
+                glued |= not v.cut_between(run[-1].end, nxt.start)[1]
+            if glued and talk <= max_seconds and not (nxt is not None and is_restart(text, nxt.text)):
+                for b in run:
+                    plan.drop.pop(b.id, None)
+                    restored.append(b.id)
+            i = j + 1
+    if restored:
+        plan.notes.append(f"Kept {len(restored)} short bit(s) the AI wanted to cut, because they were said "
+                          "in the same breath as what's kept and couldn't be cut cleanly: " + ", ".join(restored))
+    return restored
+
+
 SCHEMA = {
     "type": "object",
     "properties": {

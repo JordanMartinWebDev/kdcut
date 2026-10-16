@@ -273,7 +273,7 @@ class EndToEnd(unittest.TestCase):
         # Rendered black-and-white "coming up" clip; its audio still comes from the diamonds block.
         self.assertEqual(first.get("start"), "0s")
         voice = next(c for c in first if c.get("lane") == "-1")
-        self.assertAlmostEqual(float(Fraction(voice.get("start")[:-1])), 25.0, delta=0.5)
+        self.assertAlmostEqual(float(Fraction(voice.get("start")[:-1])), 25.0, delta=1.0)
         teaser = self.proj / "output" / ".work" / "teaser.mp4"
         self.assertTrue(teaser.exists())
         self.assertAlmostEqual(media.probe(teaser).duration, float(secs), delta=0.15)

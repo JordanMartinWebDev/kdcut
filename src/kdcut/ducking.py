@@ -17,6 +17,7 @@ from pathlib import Path
 from kdcut import media
 
 RATE = 100   # envelope control rate (values per second)
+CROSSFADE = 3.0   # seconds two songs overlap when the music changes
 
 
 def merge(intervals: list[tuple[float, float]], gap: float = 1.2) -> list[tuple[float, float]]:
@@ -73,12 +74,22 @@ def render_bed(pieces: list, total: float, gains: list[float], dest: Path, start
         cmd = ["ffmpeg", "-y", "-v", "error"]
         filters = []
         for k, pc in enumerate(pieces):
-            cmd += ["-ss", f"{pc.offset:.3f}", "-t", f"{pc.length:.3f}", "-i", pc.track.path]
+            # When the next song starts right where this one stops, let this one run on under
+            # it and fade: a real crossfade instead of a dip to silence between songs.
+            nxt = pieces[k + 1] if k + 1 < len(pieces) else None
+            joined = nxt is not None and abs(nxt.start - (pc.start + pc.length)) < 0.5
+            room = max(getattr(pc.track, "duration", 0) - pc.offset - pc.length, 0.0)
+            tail = min(CROSSFADE, room) if joined else 0.0
+            length = pc.length + tail
+            cmd += ["-ss", f"{pc.offset:.3f}", "-t", f"{length:.3f}", "-i", pc.track.path]
             delay = int(max(pc.start - start, 0) * 1000)
-            fade_out = max(pc.length - 2.0, 0)
+            out_d = max(tail, 2.0) if joined else 2.0
+            fade_out = max(length - out_d, 0)
+            fade_in = CROSSFADE * 0.8 if k > 0 else 1.5
             lvl = levels[k] if levels else 0.0
             filters.append(f"[{k}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,"
-                           f"volume={lvl:.1f}dB,afade=t=in:d=1.5,afade=t=out:st={fade_out:.3f}:d=2,"
+                           f"volume={lvl:.1f}dB,afade=t=in:d={fade_in:.2f},"
+                           f"afade=t=out:st={fade_out:.3f}:d={out_d:.2f},"
                            f"adelay={delay}|{delay}[m{k}]")
         n = len(pieces)
         cmd += ["-i", str(env)]
