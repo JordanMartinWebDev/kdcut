@@ -204,7 +204,8 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(plan.extend, {"B0005": 4.0})
 
     def test_edit_is_shorter(self):
-        self.assertLess(self.result["final_seconds"], self.result["raw_seconds"] * 0.6)
+        story = self.result["final_seconds"] - self.result["end_screen_seconds"]
+        self.assertLess(story, self.result["raw_seconds"] * 0.6)
         self.assertEqual(self.result["placed"], {"broll": 1, "overlay": 1, "sfx": 1, "music": 1})
 
     def test_fcpxml_is_valid_and_frame_accurate(self):
@@ -310,10 +311,27 @@ class EndToEnd(unittest.TestCase):
         self.assertTrue(any(b.get("type") == "image" for b in prompt))
         self.assertIn("No style exists yet", prompt[0]["text"])
 
+    def test_end_screen_closes_the_video(self):
+        from PIL import Image
+        root = ET.fromstring(self.xml.split("<!DOCTYPE fcpxml>", 1)[1])
+        last = list(root.find(".//sequence/spine"))[-1]
+        self.assertEqual(last.tag, "video")
+        self.assertEqual(last.get("name"), "End screen")
+        dur = Fraction(last.get("duration").rstrip("s"))
+        self.assertAlmostEqual(float(dur), 20.0, places=1)
+        self.assertEqual(self.result["end_screen_seconds"], 20.0)
+        img = Image.open(self.result["end_screen"])
+        self.assertEqual(img.size, (640, 360))          # matches the recordings
+        review = (self.proj / "output" / "review.md").read_text()
+        self.assertIn("## End screen", review)
+        self.assertIn("Import from video", review)
+
     def test_voice_and_game_audio_on_their_own_tracks(self):
         root = ET.fromstring(self.xml.split("<!DOCTYPE fcpxml>", 1)[1])
         spine = list(root.find(".//sequence/spine"))
         for main in spine:
+            if main.tag != "asset-clip":     # the end screen still
+                continue
             self.assertEqual(main.get("srcEnable"), "video")
             kids = {c.get("lane"): c for c in main if c.tag == "asset-clip"}
             self.assertTrue(kids["-1"].get("name").startswith("Voice - "))

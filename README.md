@@ -73,6 +73,22 @@ your logo and character) and saves it, so every later episode looks consistent. 
 corner is kept clear because YouTube puts the video length there. Click **New thumbnail ideas**
 for another round; earlier ones are never overwritten.
 
+### End screen
+
+Every edit ends with a 20-second end screen (tick **Add an end screen** before editing, on by
+default): a blurred last frame of the episode, two "watch next" spots on the left, a subscribe
+circle in the middle and your character on the right pointing at them (the `point_side` pose,
+or `presenting` / `point_viewer` / `wave` if you don't have it). Music keeps playing underneath.
+
+YouTube's upload API can't place end screen elements, so do this once in YouTube Studio:
+Content > the video > Editor > **End screen** > add Video (Most recent upload) on the top spot,
+Video (Best for viewer) or your series playlist on the bottom spot, and Subscribe on the circle.
+For every video after that: **End screen > Import from video** and pick the last one. The steps
+are also in `review.md`.
+
+Settings in `edit`: `end_screen`, `end_screen_seconds` (5-20), `end_screen_pose`, and
+`end_screen_labels` (`{series}` becomes the series name).
+
 ## How the AI edits
 
 It's a let's-play, so your talking is the content: the AI keeps the story, your stories and your
