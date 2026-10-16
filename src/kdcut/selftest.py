@@ -84,8 +84,10 @@ def run(out_file: Path) -> int:
         res = pipeline.run(outdir, cfg, use_ai=False, recordings=[rec], broll_files=[],
                            video={"title": "Test video"}, out_dir=outdir)
         assert res["timeline"].exists()
-        assert 0 < res["final_seconds"] < 12
-        return f"{res['clips']} clips, {res['final_seconds']:.1f}s"
+        story = res["final_seconds"] - res.get("end_screen_seconds", 0.0)
+        assert 0 < story < 12, f"story {story:.1f}s"
+        assert res.get("end_screen") and Path(res["end_screen"]).exists(), "no end screen"
+        return f"{res['clips']} clips, {story:.1f}s + {res['end_screen_seconds']:.0f}s end screen"
     check("edit pipeline", edit)
 
     def thumb():
