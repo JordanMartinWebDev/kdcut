@@ -39,6 +39,15 @@ After that, the only thing that leaves your PC is transcript text sent to Claude
    Name it like its timelapse (`House.mp4` + `House.m4a`) or let the AI match it by what you say.
    Long pauses and anything after "cut that" are taken out of the voiceover, and a timelapse
    that's shorter than its voiceover is slowed down to fit.
+How the AI edit decides what stays: it first reads the **whole episode** and writes a short
+story outline (goals, beats, setups and their payoffs), so every cut is checked against the
+story. KDcut also measures the footage itself, for free: how animated your voice is, how much
+the picture moves, how long inventory or chest screens are open, and sudden loud game sounds.
+The AI uses those numbers for stretches the story doesn't decide. Lively wordless moments stay
+in real time, menus and AFK time are cut, and long stretches of slow progress (walking
+somewhere, strip mining, building) are **fast-forwarded** with a small `▶▶ 8x` badge instead
+of cut. The outline is saved as `story.json` next to the timeline.
+
 5. Click **Edit my video**. When it finishes, click **How to open in Resolve**, then import the
    `.fcpxml` with **File > Import > Timeline**.
 
