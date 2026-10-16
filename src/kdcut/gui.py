@@ -447,8 +447,9 @@ class SettingsDialog(QDialog):
         crow.addWidget(cbrowse)
         cbox = QVBoxLayout()
         cbox.addLayout(crow)
-        cbox.addWidget(label("Tip: Brazey's Emote Generator (in Brazey's pack, Pose Tool folder) makes 70 poses "
-                             "from your skin. Name your favourites by mood, e.g. shocked.png, celebrating.png.",
+        cbox.addWidget(label("Name poses by mood, e.g. shocked.png, celebrating.png. Add a poses.json beside "
+                             "them to describe each pose's mood and which way it faces, so the AI picks the "
+                             "right one and the character always looks toward the words.",
                              "hint"))
         form.addRow("Your character", cbox)
 

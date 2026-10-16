@@ -1,8 +1,9 @@
 """Thumbnail maker.
 
 You give it a screenshot (or a few). It builds 1280x720 thumbnails in a consistent style
-per series: punchy 2-4 word text with a thick outline, your character (poses made with
-Brazey's Emote Generator), one or two item icons from your packs, an episode badge, and
+per series: punchy 2-4 word text with a thick outline, your character (transparent PNG poses
+of your skin, e.g. Blender renders; an optional poses.json describes each pose's mood and
+facing, and a brand glow), one or two item icons from your packs, an episode badge, and
 optionally a ring + arrow pointing at the key thing in the screenshot.
 
 Style rules baked in (YouTube thumbnail best practices):
@@ -52,6 +53,7 @@ class Theme:
     vignette: float = 0.55
     edge_bar: bool = True
     logo: str = ""                # series logo PNG (transparent), shown bottom-left
+    character_glow: str = ""      # "#RRGGBB" halo behind the character ("" = the pose pack's glow)
     designed: bool = False        # False until the AI has picked colours and font
     badge_style: str = "ribbon"   # episode number: corner | hang_tag | ribbon | medallion | stamp | tab
 
@@ -165,7 +167,46 @@ def list_characters(cfg: dict) -> list[Path]:
     d = (cfg.get("thumbnails", {}).get("characters_dir") or "").strip()
     if not d or not Path(d).expanduser().is_dir():
         return []
-    return sorted(p for p in Path(d).expanduser().rglob("*.png"))
+    return sorted(p for p in Path(d).expanduser().rglob("*.png") if not p.stem.startswith("_"))
+
+
+@dataclass
+class PoseInfo:
+    """Optional notes about a pose, from poses.json in the characters folder.
+
+    poses.json looks like:
+        {"_style": {"glow": "#FFC440"},
+         "shocked": {"mood": "hands up by the face; surprise, danger", "faces": "left"}}
+    `faces` is which way the character looks in the PNG (left | right | front). KDcut flips
+    the pose so it looks toward the words. `glow` adds a soft halo behind every pose."""
+    mood: str = ""
+    faces: str = "left"
+
+
+def pose_library(cfg: dict) -> tuple[dict[str, PoseInfo], dict]:
+    """Pose notes and pack-wide style from poses.json (both empty if there isn't one)."""
+    d = (cfg.get("thumbnails", {}).get("characters_dir") or "").strip()
+    path = Path(d).expanduser() / "poses.json" if d else None
+    if not path or not path.is_file():
+        return {}, {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}, {}
+    if not isinstance(data, dict):
+        return {}, {}
+    style = data.get("_style") if isinstance(data.get("_style"), dict) else {}
+    poses = {}
+    for name, v in data.items():
+        if name.startswith("_"):
+            continue
+        if isinstance(v, str):
+            v = {"mood": v}
+        if isinstance(v, dict):
+            faces = str(v.get("faces", "left")).lower()
+            poses[name] = PoseInfo(mood=str(v.get("mood", "")),
+                                   faces=faces if faces in ("left", "right", "front") else "left")
+    return poses, style
 
 
 def font_assets(index: AssetIndex | None) -> dict[str, Path]:
@@ -259,6 +300,21 @@ def _outlined(sprite: Image.Image, width: int, color=(255, 255, 255, 255), shado
         base.alpha_composite(outline)
     base.alpha_composite(sprite, (pad, pad))
     return base
+
+
+def _glow(sticker: Image.Image, color: str, radius: int = 34) -> Image.Image:
+    """Soft brand-coloured halo behind a sticker (same size canvas, grown by the radius)."""
+    pad = radius * 2
+    out = Image.new("RGBA", (sticker.width + pad * 2, sticker.height + pad * 2), (0, 0, 0, 0))
+    alpha = Image.new("L", out.size, 0)
+    alpha.paste(sticker.getchannel("A"), (pad, pad))
+    halo = alpha.filter(ImageFilter.MaxFilter(9)).filter(ImageFilter.GaussianBlur(radius))
+    halo = halo.point(lambda v: min(255, int(v * 1.5)))
+    layer = Image.new("RGBA", out.size, _hex(color))
+    layer.putalpha(halo)
+    out.alpha_composite(layer)
+    out.alpha_composite(sticker, (pad, pad))
+    return out
 
 
 def _text_layer(lines: list[str], font: ImageFont.FreeTypeFont, theme: Theme, highlight: str) -> Image.Image:
@@ -500,7 +556,8 @@ def _place(size: tuple[int, int], preferred: str, obstacles: list[Rect], margin:
 
 def render(concept: Concept, background: Path, theme: Theme, *, font_path: Path | None = None,
            icons: dict[str, Path] | None = None, characters: dict[str, Path] | None = None,
-           episode: str | int | None = None) -> Image.Image:
+           episode: str | int | None = None, poses: dict[str, PoseInfo] | None = None,
+           glow: str = "") -> Image.Image:
     layout = concept.layout if concept.layout in LAYOUTS else "side"
     src = Image.open(background).convert("RGB")
     centering = (0.5, 0.5)
@@ -539,12 +596,21 @@ def render(concept: Concept, background: Path, theme: Theme, *, font_path: Path 
         height = 0.80 if layout == "top" else 0.96
         f = min(H * height / char.height, W * (0.40 if layout == "top" else 0.46) / char.width)
         char = _resize(char, (max(1, int(char.width * f)), max(1, int(char.height * f))))
-        if not left:
+        # Turn the character toward the words: on the right it should look left, and vice versa.
+        faces = (poses or {}).get(concept.character, PoseInfo()).faces
+        want = "left" if left else "right"
+        if faces != "front" and faces != want:
             char = ImageOps.mirror(char)
         sticker = _outlined(char, 10)
-        x = W - sticker.width + 40 if left else -40
-        y = H - sticker.height + 60
-        char_box = (x + 30, y + 30, x + sticker.width - 30, H)
+        gpad = 0
+        glow_color = theme.character_glow or glow
+        if glow_color:
+            before = sticker.width
+            sticker = _glow(sticker, glow_color)
+            gpad = (sticker.width - before) // 2
+        x = (W - sticker.width + 40 + gpad) if left else (-40 - gpad)
+        y = H - sticker.height + 60 + gpad
+        char_box = (x + 30 + gpad, y + 30 + gpad, x + sticker.width - 30 - gpad, H)
         char_layer = (sticker, (x, y))
         char_mask.paste(sticker.getchannel("A"), (x, y))
 
@@ -686,6 +752,7 @@ def make(cfg: dict, video: dict, screenshots: list[Path], out_dir: Path, *, titl
     want_theme = theme is None or not theme.designed
     fonts = font_assets(index)
     chars = {p.stem: p for p in list_characters(cfg)}
+    poses, pose_style = pose_library(cfg)
     words = " ".join([video.get("topic", ""), series, *titles[:3], *text_ideas]).replace("'", " ").split()
     icons = icon_candidates(index, words)
 
@@ -701,7 +768,12 @@ def make(cfg: dict, video: dict, screenshots: list[Path], out_dir: Path, *, titl
             if text_ideas:
                 info.append("Thumbnail text ideas: " + " | ".join(text_ideas))
             info.append("Icons available: " + (", ".join(icons) if icons else "(none)"))
-            info.append("Character poses available: " + (", ".join(chars) if chars else "(none: use null)"))
+            if chars and any(poses.get(n) and poses[n].mood for n in chars):
+                info.append("Character poses available (pick the one whose mood fits the video):\n"
+                            + "\n".join(f"- {n}: {poses[n].mood}" if poses.get(n) and poses[n].mood else f"- {n}"
+                                        for n in chars))
+            else:
+                info.append("Character poses available: " + (", ".join(chars) if chars else "(none: use null)"))
             if want_theme:
                 info.append(THEME_RULES)
                 info.append("Fonts available: " + (", ".join(sorted(fonts)) if fonts else "(none: use 'default')"))
@@ -775,7 +847,7 @@ def make(cfg: dict, video: dict, screenshots: list[Path], out_dir: Path, *, titl
     for n, c in enumerate(concepts[: int(cfg["thumbnails"].get("variants", 3))], start + 1):
         bg = screenshots[min(max(c.background, 1), len(screenshots)) - 1]
         img = render(c, bg, theme, font_path=font_path, icons=icons, characters=chars,
-                     episode=video.get("episode"))
+                     episode=video.get("episode"), poses=poses, glow=str(pose_style.get("glow") or ""))
         dest = tdir / f"thumbnail_{n}.jpg"
         img.save(dest, "JPEG", quality=92, optimize=True)   # under YouTube's 2 MB limit
         made.append(dest)
