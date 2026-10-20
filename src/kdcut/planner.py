@@ -17,7 +17,7 @@ class Plan:
     extend: dict[str, float] = field(default_factory=dict)  # block id -> seconds of silent gameplay to keep after it
     fast: list[dict] = field(default_factory=list)          # {id, seconds, speed, reason}: sped-up quiet stretch after a block
     montage: list[dict] = field(default_factory=list)       # {id, seconds, reason}: quiet stretch cut to the beat of a song
-    broll: list[dict] = field(default_factory=list)         # {file, at, duration, reason}
+    broll: list[dict] = field(default_factory=list)         # {file, at, start_words, end_words, clip_from, clip_to, reason}
     overlays: list[dict] = field(default_factory=list)      # {at, query, duration}
     sfx: list[dict] = field(default_factory=list)           # {at, query, when}
     chapters: list[dict] = field(default_factory=list)      # {at, title}
@@ -34,7 +34,7 @@ class Plan:
         return cls(**{k: v for k, v in data.items() if k in known})
 
 
-RULES_VERSION = 6     # bump when the editing rules change, so saved plans are redone
+RULES_VERSION = 7     # bump when the editing rules change, so saved plans are redone
 
 
 def blocks_key(blocks: list[Block]) -> str:
@@ -193,13 +193,21 @@ SCHEMA = {
         },
         "broll": {
             "type": "array",
-            "description": "Place one of the provided B-roll files over the gameplay while the commentary continues.",
+            "description": "Show part of a provided B-roll file over the gameplay while the commentary continues.",
             "items": {"type": "object", "properties": {
                 "file": {"type": "string", "description": "Exact filename from the B-roll list."},
-                "at": {"type": "string", "description": "Block id where it starts."},
-                "duration": {"type": "number"},
+                "at": {"type": "string", "description": "Block id where the creator mentions what it shows."},
+                "start_words": {"type": "string",
+                                "description": "The exact 3-6 words (copied from the transcript) where the "
+                                               "B-roll should appear: where the thing it shows is named, e.g. "
+                                               "'got some kelp'. May run into the next block."},
+                "end_words": {"type": "string",
+                              "description": "Optional: the exact 2-6 words where talk about it ends."},
+                "clip_from": {"type": "number", "description": "Seconds into the file to start from (0 = the start)."},
+                "clip_to": {"type": "number", "description": "Seconds into the file to stop. Use only the part "
+                                                             "that matches what's being said, usually 4-12s."},
                 "reason": {"type": "string"},
-            }, "required": ["file", "at", "duration"]},
+            }, "required": ["file", "at", "start_words", "clip_from", "clip_to"]},
         },
         "overlays": {
             "type": "array",
@@ -279,8 +287,15 @@ def system_prompt(cfg: dict, video: dict) -> str:
         "list them. Blocks marked [HIGHLIGHT] are moments the creator flagged as great: never "
         "cut them, and consider an extend or SFX there.",
         "- Blocks marked [CHAPTER] are where the creator wants a new chapter.",
-        "- B-roll: place provided B-roll files where the commentary talks about what they "
-        "show (e.g. a build timelapse over 'so I finished the walls'). Each file at most once.",
+        "- B-roll: show a provided B-roll file at the moment the creator names what it shows, "
+        "not where the topic starts: set start_words to the words that name it (e.g. 'got some "
+        "kelp', 'wandering trader come and visit me'). Each file's list shows what is on screen "
+        "when; use just the matching part (clip_from/clip_to), usually 4-12 seconds, not the "
+        "whole file. Match on what the file shows, not just its name. Spread them out: never two "
+        "on the same sentence. A file can be used again for a different part of it. When the "
+        "creator says footage is on screen ('there's footage on screen now'), the B-roll for "
+        "that goes right there. B-roll is optional: skip any file that doesn't clearly match "
+        "something the creator says; using none is fine.",
         OVERLAY_RULE if cfg["edit"].get("overlays", False) else
         "- Don't add on-screen graphics or text; the creator adds those by hand.",
         "- Sound effects: only where a viewer would expect a sound: a punchline, a fail, a "
@@ -378,14 +393,16 @@ def format_blocks(blocks: list[Block], recordings: list[Path], context: list[Blo
     return "\n".join(out)
 
 
-def user_prompt(blocks_text: str, broll: list[tuple[str, float]], vocab: dict[str, list[str]],
+def user_prompt(blocks_text: str, broll: list[tuple], vocab: dict[str, list[str]],
                 outline_text: str = "") -> str:
     parts = []
     if outline_text:
         parts.append("STORY OUTLINE (whole episode):\n" + outline_text + "\n")
     if broll:
-        parts.append("B-roll files available (filename, length):")
-        parts += [f"- {name} ({dur:.0f}s)" for name, dur in broll]
+        parts.append("B-roll files available (filename, length: what's on screen when):")
+        for name, dur, *shows in broll:
+            what = shows[0] if shows and shows[0] else ""
+            parts.append(f"- {name} ({dur:.0f}s)" + (f": {what}" if what else ""))
     else:
         parts.append("No B-roll files were provided for this video.")
     for cat, words in vocab.items():
@@ -434,7 +451,7 @@ def clean_fast(f: dict, ids: set[str], quiet_seconds: dict[str, float]) -> dict 
 
 
 def make_plan(blocks: list[Block], recordings: list[Path], cfg: dict, video: dict,
-              broll: list[tuple[str, float]], vocab: dict[str, list[str]],
+              broll: list[tuple], vocab: dict[str, list[str]],
               caller: ToolCaller = llm.call_tool, log=print,
               notes: dict[str, list[str]] | None = None, measured: dict[str, str] | None = None,
               outline=None, quiet_seconds: dict[str, float] | None = None) -> Plan:
@@ -444,7 +461,7 @@ def make_plan(blocks: list[Block], recordings: list[Path], cfg: dict, video: dic
     plan = Plan()
     sys_prompt = system_prompt(cfg, video)
     windows = [blocks[i:i + window] for i in range(0, len(blocks), window)] or [[]]
-    used_broll: set[str] = set()
+    used_broll: dict[str, list[tuple[float, float]]] = {}     # file -> parts already shown
     beats = None
     outline_text = ""
     if outline is not None:
@@ -458,7 +475,7 @@ def make_plan(blocks: list[Block], recordings: list[Path], cfg: dict, video: dic
         start = blocks.index(chunk[0])
         context = blocks[max(0, start - 15):start]
         log(f"AI edit pass {w_idx + 1}/{len(windows)} ({len(chunk)} blocks)")
-        remaining_broll = [(n, d) for n, d in broll if n not in used_broll]
+        remaining_broll = list(broll)
         result = caller(
             cfg, sys_prompt,
             user_prompt(format_blocks(chunk, recordings, context, notes, measured, beats), remaining_broll,
@@ -486,11 +503,21 @@ def make_plan(blocks: list[Block], recordings: list[Path], cfg: dict, video: dic
             item = clean_fast(f, chunk_ids, (quiet_seconds or {}))
             if item and all(x["id"] != item["id"] for x in plan.fast):
                 plan.fast.append(item)
-        broll_names = {n for n, _ in broll}
+        broll_names = {b[0] for b in broll}
         for item in result.get("broll", []):
-            if item.get("at") in chunk_ids and item.get("file") in broll_names and item["file"] not in used_broll:
-                used_broll.add(item["file"])
-                plan.broll.append(item)
+            if item.get("at") not in chunk_ids or item.get("file") not in broll_names:
+                continue
+            try:
+                part = (float(item.get("clip_from") or 0), float(item.get("clip_to") or 0))
+            except (TypeError, ValueError):
+                part = (0.0, 0.0)
+            shown = used_broll.setdefault(item["file"], [])
+            # The same part of a file twice would look like a mistake.
+            if any(part[0] < b and a < (part[1] if part[1] > part[0] else 1e9) for a, b in shown) \
+                    or (shown and part[1] <= part[0]):
+                continue
+            shown.append((part[0], part[1] if part[1] > part[0] else 1e9))
+            plan.broll.append(item)
         for key in ("overlays", "sfx", "chapters"):
             for item in result.get(key, []):
                 if item.get("at") in valid:
