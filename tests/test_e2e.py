@@ -48,6 +48,9 @@ class FakeAI:
         if tool_name == "describe_frames":
             ids = [b["text"].split(":")[0] for b in user if b.get("type") == "text" and b["text"].startswith("F")]
             return {"frames": [{"id": i, "desc": "fighting a zombie in a cave", "action": 3} for i in ids]}
+        if tool_name == "describe_clip":
+            return {"segments": [{"from": 0, "to": 2, "shows": "castle walls going up"},
+                                 {"from": 2, "to": 99, "shows": "finished castle walls"}]}
         if tool_name == "design_thumbnails":
             return {"theme": {"primary": "#E63946", "accent": "#FFD23F", "font": "not-a-font", "badge": "EP {n}"},
                     "concepts": [
@@ -59,7 +62,8 @@ class FakeAI:
             return {
                 "drop": [{"id": "B0001", "reason": "mic check"}],
                 "extend": [{"id": "B0005", "seconds": 4}],
-                "broll": [{"file": "castle-walls-timelapse.mp4", "at": "B0005", "duration": 4,
+                "broll": [{"file": "castle-walls-timelapse.mp4", "at": "B0005", "start_words": "finished the castle walls",
+                           "clip_from": 0, "clip_to": 4,
                            "reason": "talks about finishing the walls"}],
                 "overlays": [{"at": "B0006", "query": "diamond pickaxe", "duration": 2, "text": "Diamonds"}],
                 "sfx": [{"at": "B0006", "query": "level up", "when": "end"},
@@ -185,6 +189,7 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("[FORCED CUT]", prompt)
         self.assertIn("[HIGHLIGHT]", prompt)
         self.assertIn("castle-walls-timelapse.mp4", prompt)
+        self.assertIn("castle walls going up", prompt)         # it looked at the clip first
 
     def test_outputs_exist(self):
         out = self.proj / "output"
@@ -195,7 +200,8 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("DIAMONDS!", self.kit)
         self.assertIn("mic check", self.review)
         self.assertIn("no sound matched 'ender dragon roar'", self.review)
-        self.assertIn("B-roll  castle-walls-timelapse.mp4", self.review)
+        self.assertIn("of castle-walls-timelapse.mp4", self.review)
+        self.assertNotIn("words not found", self.review)
 
     def test_spoken_cut_removed_the_mistake(self):
         self.assertIn("[you said 'cut that']", self.review)

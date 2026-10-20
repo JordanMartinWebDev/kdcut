@@ -19,7 +19,7 @@ import tomllib
 from pathlib import Path
 
 from kdcut import blocks as blocks_mod
-from kdcut import audioprep, captions, graphics, vad, ducking, fcpxml, media, metadata, music, planner, transcribe, vision
+from kdcut import audioprep, broll as broll_mod, captions, graphics, vad, ducking, fcpxml, media, metadata, music, planner, transcribe, vision
 from kdcut import montage as montage_mod, signals as signals_mod, speedup, story
 from kdcut import timelapse as timelapse_mod
 from kdcut.assets import AssetIndex
@@ -228,6 +228,13 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         plan_notes = {k: list(v) for k, v in notes.items()}
         for k, v in signals_mod.as_notes(measured).items():
             plan_notes.setdefault(k, []).extend(v)
+        if broll:
+            # What's in each B-roll clip, so the editor can match it and use just the right part.
+            try:
+                shows = broll_mod.look(broll_by_name, cfg, work, caller=call, log=r.log)
+                broll = [(n, d, broll_mod.describe(shows.get(n, []))) for n, d in broll]
+            except Exception as exc:
+                r.log(f"B-roll not looked at (file names only): {exc}")
         plan = planner.make_plan(blocks, recordings, cfg, video, broll, vocab, caller=call,
                                  log=r.log, notes=plan_notes, measured=measured.block_tags,
                                  outline=outline, quiet_seconds=measured.quiet_seconds)
@@ -545,23 +552,28 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             return None
         return ends[k] if at_end else starts[k]
 
+    picks = []
     for item in plan.broll:
-        rec = anchor(item["at"])
-        path = broll_by_name.get(item["file"])
-        if rec is None or path is None or not path.exists():
+        path = broll_by_name.get(item.get("file", ""))
+        if path is None or not path.exists() or item.get("at") not in by_id:
             continue
+        b = by_id[item["at"]]
         info = media.probe(path)
-        max_len = info.duration if info.duration > 0 else float(item.get("duration", 5))
-        dur = tl.frames(min(float(item.get("duration", 6)), max_len))
-        dur = min(dur, tl.duration - rec)
-        if dur <= 0:
-            continue
-        lane = lanes.place(int(tcfg["broll_lane"]), rec, dur)
-        tl.connected.append(Clip(path=path, src_in=0, dur=dur, rec=rec, lane=lane,
-                                 enable="video", role="broll", name=path.stem))
+        length = 0.0 if path.suffix.lower() in media.IMAGE_EXTS else info.duration
+        pick = broll_mod.plan_pick(item, path, length, b, words[b.source], recordings[b.source],
+                                   tl, anchor(item["at"]))
+        if pick:
+            picks.append(pick)
+    for pick in broll_mod.no_stacking(picks, tl.frames):
+        lane = lanes.place(int(tcfg["broll_lane"]), pick.rec, pick.dur)
+        tl.connected.append(Clip(path=pick.path, src_in=pick.src_in, dur=pick.dur, rec=pick.rec, lane=lane,
+                                 enable="video", role="broll", name=pick.path.stem,
+                                 is_image=pick.path.suffix.lower() in media.IMAGE_EXTS))
         placed["broll"] += 1
-        review.append(f"{fmt_ts(tl.seconds(rec))}  B-roll  {path.name}"
-                      + (f"  ({item['reason']})" if item.get("reason") else ""))
+        part = f"{tl.seconds(pick.src_in):.0f}-{tl.seconds(pick.src_in + pick.dur):.0f}s of "
+        review.append(f"{fmt_ts(tl.seconds(pick.rec))}  B-roll  {part}{pick.name}"
+                      + ("" if pick.exact else "  [words not found: placed at the block]")
+                      + (f"  ({pick.reason})" if pick.reason else ""))
 
     for n, item in enumerate(plan.overlays if ed.get("overlays", False) else []):
         rec = anchor(item["at"])
