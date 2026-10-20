@@ -44,7 +44,8 @@ DEFAULTS: dict[str, Any] = {
         "speedup_badge": True,
         "montages": True,          # cut hands-on stretches (building, mining) to the beat of a song
         "max_montages": 2,
-        "montage_seconds": 15,     # small fast-forward badge on sped-up stretches
+        "montage_seconds": 15,
+        "minecraft_assets": "",    # Minecraft's assets folder; found automatically for the usual launchers     # small fast-forward badge on sped-up stretches
         "timelapse_transition": "dip",   # dip: quick fade through black into and out of a timelapse | cut
         "overlays": False,         # AI-placed item spins / text labels (off: you add graphics yourself)
         "end_screen": True,        # add an end screen laid out for YouTube's end screen elements

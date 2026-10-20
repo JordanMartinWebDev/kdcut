@@ -1,8 +1,9 @@
 """Beat-synced montages: a stretch of building or mining cut to the beat of a song, so the
 block sounds land on the beat ("dum, dum, dum" = place, break, place).
 
-  1. Hits: sharp game sounds in the stretch, found on the game audio track (your voice is on
-     its own track, so it doesn't get in the way). Time in menus is skipped.
+  1. Hits: blocks breaking or being placed, found on the game audio track (your voice is on
+     its own track, so it doesn't get in the way) by matching Minecraft's own block sounds
+     (mcsounds), so eating, burps, pickups, damage and footsteps don't count. Menus skipped.
   2. Beats: the beat grid of an upbeat song from your library. Most Epidemic tracks carry a
      BPM tag, so only where the beats fall has to be found.
   3. Slices: one short piece of gameplay per beat (every other beat for fast songs), in the
@@ -133,7 +134,7 @@ def beat_grid(env, fps: float, bpm: float | None = None) -> tuple[float, float]:
 
 
 def find_hits(env, fps: float, start: float, skip: list[tuple[float, float]] = (),
-              min_gap: float = 0.12) -> list[tuple[float, float]]:
+              min_gap: float = 0.12, loose: bool = False) -> list[tuple[float, float]]:
     """(time, strength) of sharp sounds: local peaks of the onset envelope that stand well
     above the stretch's usual level. Times inside `skip` spans (menus) are left out."""
     import numpy as np
@@ -142,7 +143,10 @@ def find_hits(env, fps: float, start: float, skip: list[tuple[float, float]] = (
     med = float(np.median(env))
     mad = float(np.median(np.abs(env - med))) or 1e-6
     peaks = np.sort(env)[-max(len(env) // 200, 1):]          # the loudest 0.5% of frames
-    thr = max(med + 6 * mad, 0.35 * float(np.median(peaks)), 0.08)
+    if loose:       # something else (the block-sound matcher) decides which hits count
+        thr = max(med + 3 * mad, 0.12 * float(np.median(peaks)), 0.03)
+    else:
+        thr = max(med + 6 * mad, 0.35 * float(np.median(peaks)), 0.08)
     w = max(int(min_gap * fps), 1)
     out = []
     for i in np.nonzero(env > thr)[0]:
@@ -162,26 +166,51 @@ def find_hits(env, fps: float, start: float, skip: list[tuple[float, float]] = (
 # Laying out the slices
 # --------------------------------------------------------------------------------------
 
+def focus(hits: list[tuple[float, float]], n: int, slot: float, room: float = 1.3) -> list[tuple[float, float]]:
+    """The busiest run of block sounds that can fill `n` slices of `slot` seconds: of all
+    stretches long enough (n * slot * room seconds), the one with the most block sounds. A
+    lone block sound far from the real work (breaking a log between bites of food) stays out
+    of the montage, and the slices show one continuous bit of building or mining."""
+    span = n * slot * room
+    best, best_count = None, 0
+    j = 0
+    for i in range(len(hits)):
+        while j < len(hits) and hits[j][0] - hits[i][0] < span:
+            j += 1
+        if j >= len(hits):          # this stretch runs off the end: measure it from the end instead
+            k = i
+            while k > 0 and hits[-1][0] - hits[k - 1][0] < span:
+                k -= 1
+            count = len(hits) - k
+            if count > best_count:
+                best, best_count = (k, len(hits)), count
+            break
+        if j - i > best_count:
+            best, best_count = (i, j + 1), j - i
+    return hits[best[0]:best[1]] if best else hits
+
+
 def choose(hits: list[tuple[float, float]], durations: list[float]) -> list[float] | None:
     """One hit per slice, in order, each far enough after the last that slices never repeat
-    footage. From each stretch of the timeline the strongest hit wins, so the cuts land on
-    the clearest sounds and the whole stretch is covered (the build visibly grows)."""
+    footage. Walks through the hits taking every one that fits, then keeps the strongest one
+    from each stretch of those, so the cuts cover the run evenly and land on clear sounds."""
     n = len(durations)
-    if len(hits) < n:
+    slot = max(durations) if durations else 0.0
+    fits: list[tuple[float, float]] = []
+    for t, strength in hits:
+        if not fits or t - fits[-1][0] >= slot:
+            fits.append((t, strength))
+        elif strength > fits[-1][1] and (len(fits) < 2 or t - fits[-2][0] >= slot):
+            fits[-1] = (t, strength)             # a clearer sound just after: use that one
+    if len(fits) < n:
         return None
     picked: list[float] = []
-    last_end = -1e9
     for k in range(n):
-        lo = k * len(hits) // n
-        hi = max((k + 1) * len(hits) // n, lo + 1)
-        bucket = [h for h in hits[lo:hi] if h[0] - PRE >= last_end]
-        if not bucket:      # the bucket was used up by the previous slice: take the next one that fits
-            bucket = [h for h in hits[hi:] if h[0] - PRE >= last_end][:3]
+        lo, hi = k * len(fits) // n, max((k + 1) * len(fits) // n, k * len(fits) // n + 1)
+        bucket = [f for f in fits[lo:hi] if not picked or f[0] - picked[-1] >= slot]
         if not bucket:
             return None
-        t = max(bucket, key=lambda h: h[1])[0]
-        picked.append(t)
-        last_end = t - PRE + durations[k]
+        picked.append(max(bucket, key=lambda f: f[1])[0])
     return picked
 
 
@@ -216,7 +245,12 @@ def lay_out(hits: list[tuple[float, float]], song: Path, song_name: str, period:
         if not fits:
             continue
         first = next((b for b in fits if b >= skip_intro), fits[-1])
-        picked = choose(hits, [slot] * want)
+        picked = None
+        for room in (1.3, 1.7, 2.2, 3.0):        # the busiest run first, widened until it fits
+            picked = choose(focus(hits, want, slot, room), [slot] * want)
+            if picked:
+                break
+        picked = picked or choose(hits, [slot] * want)
         if picked:
             beats = [PRE + slot * k for k in range(want + 1)]
             return Plan(song, song_name, first - PRE, beats, picked, round(60.0 / period, 1), step)
@@ -235,7 +269,7 @@ def render(plan: Plan, rec: Path, game_stream: int | None, dest: Path, fps, widt
     frames = cuts[-1] - cuts[0]
     total = frames / float(fps)
     sig = (f"{rec}|{plan.song}|{plan.song_start:.3f}|{plan.hits}|{cuts}|{game_stream}|{music_db}|{hit_gains}|"
-           f"{fps}|{width}x{height}|v2")
+           f"{fps}|{width}x{height}|v7")
     dest = dest.with_name(f"{dest.stem}_{hashlib.sha1(sig.encode()).hexdigest()[:10]}.mp4")
     if dest.is_file():
         return dest, frames
@@ -337,17 +371,34 @@ class Result:
     note: str = ""
 
 
-def make(rec: Path, game_stream: int | None, start: float, end: float, song, fps, width: int, height: int,
-         dest: Path, music_db: float, sig=None, target: float = 15.0, log=print) -> Result | None:
-    """Build a montage from rec[start:end] to `song` (a music.Track). None when the stretch
-    doesn't have enough clear hits (the caller falls back to a fast-forward)."""
-    from kdcut import signals
-    x = decode(rec, start, end - start, game_stream)
+def block_hits(x, start: float, end: float, matcher, skip=()) -> list[tuple[float, float]]:
+    """Sharp sounds in game audio `x` (decoded from `start`) that are blocks breaking or being
+    placed, as (time, how well it matched Minecraft's sound). Eating, burps, pickups, damage,
+    footsteps and mining ticks are left out."""
     env, efps = onset_envelope(x)
-    hits = find_hits(env, efps, start, menu_spans(sig, signals.MENU_FLAT))
-    hits = [h for h in hits if start + PRE <= h[0] <= end - HIT_WINDOW]
+    out = []
+    for t, _ in find_hits(env, efps, start, skip, min_gap=0.08, loose=True):
+        if not (start + PRE <= t <= end - HIT_WINDOW):
+            continue
+        score, _, at = matcher.locate(x, int(round((t - start) * SR)))
+        if score >= matcher.threshold:
+            out.append((round(start + at / SR, 4), score))     # exact start from the waveform match
+    return out
+
+
+def make(rec: Path, game_stream: int | None, start: float, end: float, song, fps, width: int, height: int,
+         dest: Path, music_db: float, sig=None, target: float = 15.0, matcher=None, log=print) -> Result | None:
+    """Build a montage from rec[start:end] to `song` (a music.Track), cutting only on blocks
+    breaking or being placed (`matcher`: mcsounds.Matcher). None when there's no matcher or
+    the stretch doesn't have enough block sounds (the caller falls back to a fast-forward)."""
+    from kdcut import signals
+    if matcher is None:
+        log("Montage skipped: Minecraft's sound files weren't found, so block sounds can't be told apart")
+        return None
+    x = decode(rec, start, end - start, game_stream)
+    hits = block_hits(x, start, end, matcher, menu_spans(sig, signals.MENU_FLAT))
     if len(hits) < MIN_HITS:
-        log(f"Montage skipped: only {len(hits)} clear game sounds in that stretch")
+        log(f"Montage skipped: only {len(hits)} block sounds in that stretch")
         return None
     song_len = float(getattr(song, "duration", 0) or 0) or media.probe(Path(song.path)).duration
     window = min(song_len, 90.0)

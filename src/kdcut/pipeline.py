@@ -340,7 +340,16 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     fast_items = list(plan.fast)
     montage_info: dict[int, montage_mod.Result] = {}
     montage_songs: set[str] = set()
+    matcher = None
     if plan.montage and bool(ed.get("montages", True)):
+        try:
+            from kdcut import mcsounds
+            matcher = mcsounds.Matcher.load(mcsounds.find_assets(ed.get("minecraft_assets") or None), log=r.log)
+            if matcher is None:
+                tl_notes.append("Montages became fast-forwards: Minecraft's sound files weren't found (set "
+                                "edit.minecraft_assets to your launcher's assets folder)")
+        except ImportError:
+            matcher = None
         for n, item in enumerate(plan.montage[:int(ed.get("max_montages", 2))]):
             b = by_id.get(item.get("id"))
             if b is None:
@@ -363,7 +372,8 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
                                            span[0], span[1], song, fps, width, height,
                                            work / "montage" / f"montage_{b.id}.mp4",
                                            music_db=audioprep.music_gain(Path(song.path)) + max(vol + 16.0, -8.0),
-                                           sig=sig, target=float(ed.get("montage_seconds", 15)), log=r.log)
+                                           sig=sig, target=float(ed.get("montage_seconds", 15)),
+                                           matcher=matcher, log=r.log)
                 except ImportError:
                     r.log("Montage skipped: numpy isn't available")
                 except media.MediaError as exc:

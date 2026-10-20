@@ -45,17 +45,59 @@ def song(path, bpm=120.0, first=0.23, seconds=60):
     write(path, x)
 
 
-def game(path, hits, seconds=60):
-    """Block sounds (loud bursts) at `hits`, footsteps (quiet ticks) every 0.45 s."""
+def block_sound():
+    """One fixed 'block' sound: the game plays the same file every time."""
+    r = np.random.default_rng(42)
+    n = np.arange(3000)
+    return r.normal(0, 1, 3000) * np.exp(-n / 500)
+
+
+def eat_sound():
+    """A different crunchy sound (eating), just as loud and sharp."""
+    r = np.random.default_rng(7)
+    n = np.arange(2500)
+    return r.normal(0, 1, 2500) * np.exp(-n / 300) * (1 + 0.5 * np.sin(n / 9))
+
+
+def game(path, hits, seconds=60, eats=()):
+    """Block sounds at `hits`, eating at `eats`, footsteps (quiet ticks) every 0.45 s."""
     rng = np.random.default_rng(1)
     g = 0.003 * rng.normal(0, 1, seconds * SR)
-    for t in hits:
+    b, e = block_sound(), eat_sound()
+    for k, t in enumerate(hits):
         i = int(t * SR)
-        g[i:i + 3000] += 0.6 * rng.normal(0, 1, 3000) * np.exp(-np.arange(3000) / 500)
+        g[i:i + len(b)] += (0.12 + 0.06 * (k % 3)) * b[: len(g) - i]
+    for t in eats:
+        i = int(t * SR)
+        g[i:i + len(e)] += 0.2 * e[: len(g) - i]
     for t in np.arange(0.5, seconds - 1, 0.45):
         i = int(t * SR)
         g[i:i + 800] += 0.05 * rng.normal(0, 1, 800) * np.exp(-np.arange(800) / 150)
     write(path, g)
+
+
+def fake_assets(root: Path) -> Path:
+    """A Minecraft assets folder holding just our block sound, stored so that playing it at
+    the game's 0.8 break pitch gives the sound heard in the 'recording'."""
+    import json
+    assets = root / "assets"
+    (assets / "indexes").mkdir(parents=True)
+    h = "ab" + "0" * 38
+    (assets / "objects" / "ab").mkdir(parents=True)
+    pcm = (np.clip(block_sound() * 0.2, -1, 1) * 32767).astype("<i2")
+    with wave.open(str(assets / "objects" / "ab" / h), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(int(SR / 0.8))
+        w.writeframes(pcm.tobytes())
+    (assets / "indexes" / "1.json").write_text(json.dumps(
+        {"objects": {"minecraft/sounds/dig/stone1.ogg": {"hash": h, "size": 1}}}))
+    return assets
+
+
+def matcher_for(root: Path):
+    from kdcut import mcsounds
+    return mcsounds.Matcher.load(fake_assets(root), cache_dir=root)
 
 
 @unittest.skipUnless(HAVE, "needs ffmpeg and numpy")
@@ -86,6 +128,28 @@ class DetectionTests(unittest.TestCase):
         near = [min(abs(f - t) for f in found) for t in self.true]
         self.assertGreaterEqual(sum(e < 0.015 for e in near), 27)
         self.assertLessEqual(len(found), 34)                         # not the ~130 footsteps
+
+    def test_only_block_sounds_count_not_eating(self):
+        d = Path(tempfile.mkdtemp())
+        try:
+            blocks = [3.0, 7.5, 12.1, 20.4, 33.3, 41.0]
+            eats = [5.0, 5.25, 5.5, 5.75, 26.0, 26.2, 26.4, 50.0]
+            game(d / "g.wav", blocks, eats=eats)
+            m = matcher_for(d)
+            x = self.m.decode(d / "g.wav", 0, 60)
+            got = [t for t, _ in self.m.block_hits(x, 0.0, 60.0, m)]
+            for t in blocks:
+                self.assertTrue(any(abs(t - g) < 0.03 for g in got), t)
+            for t in eats:
+                self.assertFalse(any(abs(t - g) < 0.06 for g in got), t)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_busiest_run_wins(self):
+        lone = [(5.0, 1.0), (27.0, 1.0)]
+        run = [(60.0 + 0.4 * k, 1.0) for k in range(60)]
+        plan = self.m.lay_out(lone + run, Path("s.wav"), "S", 0.5, 0.1, 120.0)
+        self.assertGreaterEqual(min(plan.hits), 60.0)
 
     def test_menus_are_skipped(self):
         env, fps = self.m.onset_envelope(self.m.decode(self.dir / "game.wav", 0, 60))
@@ -123,7 +187,7 @@ class RenderTests(unittest.TestCase):
             track = music.Track(path=str(d / "song.wav"), title="Click Party", artist="T", tags=[], duration=60.0,
                                 bpm="120", energy="High")
             res = montage.make(d / "rec.mkv", 0, 2.0, 59.0, track, Fraction(30), 320, 180, d / "m.mp4", -6.0,
-                               log=lambda *_: None)
+                               matcher=matcher_for(d), log=lambda *_: None)
             self.assertIsNotNone(res)
             info = media.probe(res.file)
             self.assertAlmostEqual(info.duration, res.frames / 30, delta=0.1)
@@ -144,7 +208,11 @@ class RenderTests(unittest.TestCase):
             song(d / "song.wav", seconds=30)
             track = music.Track(path=str(d / "song.wav"), title="S", artist="T", tags=[], duration=30.0, bpm="120")
             self.assertIsNone(montage.make(d / "game.wav", 0, 0.0, 20.0, track, Fraction(30), 320, 180,
-                                           d / "m.mp4", -6.0, log=lambda *_: None))
+                                           d / "m.mp4", -6.0, matcher=matcher_for(d), log=lambda *_: None))
+            # Without Minecraft's sound files there's no telling blocks from eating: no montage.
+            game(d / "busy.wav", list(np.arange(1, 19, 0.6)), seconds=20)
+            self.assertIsNone(montage.make(d / "busy.wav", 0, 0.0, 20.0, track, Fraction(30), 320, 180,
+                                           d / "m.mp4", -6.0, matcher=None, log=lambda *_: None))
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
@@ -211,7 +279,8 @@ class MontageEndToEnd(unittest.TestCase):
         music_mod.HISTORY_FILE = cls.tmp / "history.json"
         cfg = config._merge(config.DEFAULTS, {
             "assets": {"index_path": str(cls.tmp / "i.json"), "cache_dir": str(cls.tmp / "c")},
-            "thumbnails": {"enabled": False}, "music": {"folders": [str(mdir)]}})
+            "thumbnails": {"enabled": False}, "music": {"folders": [str(mdir)]},
+            "edit": {"minecraft_assets": str(fake_assets(cls.tmp / "mc"))}})
         words = [Word(2.0 + 0.35 * i, 2.3 + 0.35 * i, w) for i, w in enumerate("alright lets build the house.".split())]
         words += [Word(84.0 + 0.35 * i, 84.3 + 0.35 * i, w) for i, w in enumerate("and there it is.".split())]
         info = media.probe(rec)
