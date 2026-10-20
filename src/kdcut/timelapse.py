@@ -110,19 +110,22 @@ SCHEMA = {
 
 RULES = (
     "These timelapses are silent clips (sped-up building) that play as their own scene: the "
-    "gameplay cuts away to the timelapse, then comes back. Put each one right after the line "
-    "where the creator starts that work or announces it ('alright, let's get started on this "
-    "house'), so the timelapse shows it happening. A timelapse of something finished or a "
-    "reveal goes after the line that leads into showing it. Use the file names and voiceovers "
-    "to tell what each timelapse shows. Never put one in the middle of a sentence or a story, "
-    "and never two at the same spot unless they are two stages of the same build (in order).\n"
+    "gameplay cuts away to the timelapse, then comes back. A timelapse goes right after the "
+    "creator has finished setting up that build: after he explains what he's going to build "
+    "and why, at his cue to start ('let's go', 'let's get started', 'time to build'). Never "
+    "before he's done explaining it: the viewer must hear the plan before seeing it built. "
+    "If he lays out several builds together and then says 'let's go', their timelapses play "
+    "there back to back, in the order he announced them. A timelapse of something finished or "
+    "a reveal goes after the line that leads into showing it. Use the file names and "
+    "voiceovers to tell what each timelapse shows. Never put one in the middle of a sentence "
+    "or a story.\n"
     "Loose voiceovers (no matching file name) were recorded afterwards to talk over a "
     "timelapse: give each one to the timelapse it describes, or to none."
 )
 
 
 def cache_key(kept: list[Block], timelapses: list[Timelapse], loose: list[tuple[str, str]]) -> str:
-    sig = json.dumps([[b.id for b in kept], [(t.name, round(t.duration, 1), t.voiceover.name if t.voiceover else "")
+    sig = json.dumps(["v2", [b.id for b in kept], [(t.name, round(t.duration, 1), t.voiceover.name if t.voiceover else "")
                                             for t in timelapses], loose])
     return hashlib.sha1(sig.encode("utf-8")).hexdigest()[:16]
 

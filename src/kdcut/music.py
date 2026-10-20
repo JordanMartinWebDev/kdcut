@@ -80,8 +80,16 @@ def tagged(t: "Track") -> bool:
     return bool(t.mood or t.energy or t.genre or t.tags)
 
 
+# Folder or mood words that mean a slow, low-energy track even when the file has no energy tag.
+CALM = {"peaceful", "calm", "sleepy", "relaxing", "relaxed", "ambient", "dreamy", "meditative",
+        "meditation", "soft", "gentle", "quiet", "slow", "lofi", "tranquil", "serene", "soothing"}
+
+
 def energy_level(t: "Track") -> int | None:
-    return {"low": 1, "medium": 2, "high": 3}.get((t.energy or "").strip().lower())
+    level = {"low": 1, "medium": 2, "high": 3}.get((t.energy or "").strip().lower())
+    if level is None and t.words & CALM:
+        return 1
+    return level
 
 
 def for_vibe(library: list["Track"], vibe: str = "upbeat") -> tuple[list["Track"], list["Track"]]:

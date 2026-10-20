@@ -15,6 +15,30 @@ class LLMError(RuntimeError):
     pass
 
 
+def coerce(value, schema: dict):
+    """Fix the shape of an answer to match its schema. Models sometimes send a list or an
+    object written out as a JSON string ("beats": "[{...}]"); read those back, so a whole
+    section isn't silently thrown away."""
+    kind = (schema or {}).get("type")
+    if isinstance(value, str) and kind in ("array", "object"):
+        text = value.strip()
+        try:
+            value = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            return [] if kind == "array" else {}
+    if kind == "array":
+        if isinstance(value, dict):
+            value = [value]
+        if not isinstance(value, list):
+            return []
+        items = schema.get("items") or {}
+        return [coerce(v, items) for v in value]
+    if kind == "object" and isinstance(value, dict):
+        props = schema.get("properties") or {}
+        return {k: coerce(v, props[k]) if k in props else v for k, v in value.items()}
+    return value
+
+
 def api_key(cfg: dict) -> str | None:
     """The key saved in the app's settings wins; otherwise the environment variable."""
     return (cfg["llm"].get("api_key") or "").strip() or \
@@ -74,12 +98,12 @@ def call_tool(cfg: dict, system: str, user, tool_name: str, tool_description: st
             continue
         for block in payload.get("content", []):
             if block.get("type") == "tool_use" and block.get("name") == tool_name:
-                return block["input"]
+                return coerce(block["input"], schema)
         if payload.get("stop_reason") == "max_tokens":
             raise LLMError("The AI's answer was cut off (max_tokens). Lower llm.window_blocks.")
         found = _json_in_text(payload)
         if found is not None:
-            return found
+            return coerce(found, schema)
         if nudged:
             raise LLMError("The AI did not return a structured answer.")
         nudged = True
