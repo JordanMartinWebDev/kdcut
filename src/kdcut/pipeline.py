@@ -373,7 +373,8 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
                                            work / "montage" / f"montage_{b.id}.mp4",
                                            music_db=audioprep.music_gain(Path(song.path)) + max(vol + 16.0, -8.0),
                                            sig=sig, target=float(ed.get("montage_seconds", 15)),
-                                           matcher=matcher, log=r.log)
+                                           matcher=matcher, log=r.log,
+                                           punch=float(ed.get("montage_punch", 0.0) or 0.0))
                 except ImportError:
                     r.log("Montage skipped: numpy isn't available")
                 except media.MediaError as exc:

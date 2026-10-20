@@ -45,6 +45,7 @@ DEFAULTS: dict[str, Any] = {
         "montages": True,          # cut hands-on stretches (building, mining) to the beat of a song
         "max_montages": 2,
         "montage_seconds": 15,
+        "montage_punch": 0.0,      # zoom punch on each beat cut, e.g. 0.06 (0 = off)
         "minecraft_assets": "",    # Minecraft's assets folder; found automatically for the usual launchers     # small fast-forward badge on sped-up stretches
         "timelapse_transition": "dip",   # dip: quick fade through black into and out of a timelapse | cut
         "overlays": False,         # AI-placed item spins / text labels (off: you add graphics yourself)
