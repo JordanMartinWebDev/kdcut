@@ -156,19 +156,40 @@ class DetectionTests(unittest.TestCase):
         found = [h[0] for h in self.m.find_hits(env, fps, 0.0, skip=[(0.0, 30.0)])]
         self.assertTrue(found and all(t > 30 for t in found))
 
-    def test_slices_in_order_and_never_overlap(self):
-        hits = [(float(t), 1.0) for t in self.true]
-        picked = self.m.choose(hits, [0.5] * 20)
-        self.assertEqual(picked, sorted(picked))
-        self.assertTrue(all(b - a >= 0.5 for a, b in zip(picked, picked[1:])))
-        self.assertIsNone(self.m.choose(hits[:5], [0.5] * 20))      # too few: caller falls back
+    def run_of(self, n=120, gap=0.4, at=60.0):
+        return [(at + gap * k, 1.0) for k in range(n)]
 
-    def test_fast_songs_cut_every_other_beat(self):
-        hits = [(float(t), 1.0) for t in self.true]
-        plan = self.m.lay_out(hits, Path("s.wav"), "S", 60 / 170, 0.1, 60.0)
-        self.assertEqual(plan.step, 2)
-        plan = self.m.lay_out(hits, Path("s.wav"), "S", 60 / 100, 0.1, 60.0)
-        self.assertEqual(plan.step, 1)
+    def test_slices_in_order_and_never_overlap(self):
+        plan = self.m.lay_out(self.run_of(), Path("s.wav"), "S", 0.5, 0.1, 120.0)
+        for a, b in zip(plan.segments, plan.segments[1:]):
+            self.assertGreaterEqual(b.src + 1e-6, a.src + a.dur * a.speed)     # no footage twice
+        self.assertGreater(plan.ramps, 0)                                     # fast-forward shots mixed in
+        self.assertEqual({round(g.dur, 3) for g in plan.segments if g.hit}, {0.25, 0.5})   # beat and half-beat cuts
+
+    def test_cuts_land_on_the_song_grid_from_a_downbeat(self):
+        plan = self.m.lay_out(self.run_of(), Path("s.wav"), "S", 0.5, 0.1, 120.0, bar_offset=3)
+        first = plan.song_start + self.m.PRE
+        self.assertAlmostEqual(((first - 0.1) / 0.5) % 4, 3.0, places=6)    # bar starts on the accented beat
+        for b in plan.beats:
+            self.assertAlmostEqual(((b - self.m.PRE) / 0.25) % 1, 0.0, places=6)  # every hit on a (half) beat
+
+    def test_game_sound_stops_before_the_next_dig(self):
+        hits = self.run_of()
+        plan = self.m.lay_out(hits, Path("s.wav"), "S", 0.5, 0.1, 120.0)
+        times = [t for t, _ in hits]
+        for g in plan.segments:
+            if g.hit is None:
+                continue
+            nxt = min(t for t in times if t > g.hit + 0.03)
+            self.assertLess(g.src + g.audio, nxt)
+            self.assertLessEqual(g.audio, g.dur + 1e-9)
+
+    def test_fast_songs_cut_less_often(self):
+        hits = self.run_of()
+        plan = self.m.lay_out(hits, Path("s.wav"), "S", 60 / 170, 0.1, 120.0)
+        self.assertGreaterEqual(min(g.dur for g in plan.segments), 0.2 - 1e-9)   # never strobing
+        plan = self.m.lay_out(hits, Path("s.wav"), "S", 60 / 100, 0.1, 120.0)
+        self.assertAlmostEqual(min(g.dur for g in plan.segments), 0.3, places=6)
 
 
 @unittest.skipUnless(HAVE, "needs ffmpeg and numpy")
@@ -194,7 +215,7 @@ class RenderTests(unittest.TestCase):
             x = montage.decode(res.file, 0, info.duration)
             env, fps = montage.onset_envelope(x)
             found = [h[0] for h in montage.find_hits(env, fps, 0.0)]
-            err = [min(abs(f - b) for f in found) for b in res.plan.beats[:-1]]
+            err = [min(abs(f - b) for f in found) for b in res.plan.beats]
             self.assertGreaterEqual(sum(e < 0.02 for e in err), len(err) - 1)
             self.assertEqual(res.plan.hits, sorted(res.plan.hits))
         finally:
@@ -302,4 +323,4 @@ class MontageEndToEnd(unittest.TestCase):
         self.assertEqual(self.res["placed"]["montage"], 1)
         self.assertEqual(self.res["placed"]["fast"], 0)
         review = self.res["review"].read_text(encoding="utf-8")
-        self.assertIn("cuts on the beat of Click Party", review)
+        self.assertIn("on the beat of Click Party", review)

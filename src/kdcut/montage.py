@@ -190,28 +190,28 @@ def focus(hits: list[tuple[float, float]], n: int, slot: float, room: float = 1.
     return hits[best[0]:best[1]] if best else hits
 
 
-def choose(hits: list[tuple[float, float]], durations: list[float]) -> list[float] | None:
-    """One hit per slice, in order, each far enough after the last that slices never repeat
-    footage. Walks through the hits taking every one that fits, then keeps the strongest one
-    from each stretch of those, so the cuts cover the run evenly and land on clear sounds."""
-    n = len(durations)
-    slot = max(durations) if durations else 0.0
-    fits: list[tuple[float, float]] = []
-    for t, strength in hits:
-        if not fits or t - fits[-1][0] >= slot:
-            fits.append((t, strength))
-        elif strength > fits[-1][1] and (len(fits) < 2 or t - fits[-2][0] >= slot):
-            fits[-1] = (t, strength)             # a clearer sound just after: use that one
-    if len(fits) < n:
-        return None
-    picked: list[float] = []
-    for k in range(n):
-        lo, hi = k * len(fits) // n, max((k + 1) * len(fits) // n, k * len(fits) // n + 1)
-        bucket = [f for f in fits[lo:hi] if not picked or f[0] - picked[-1] >= slot]
-        if not bucket:
-            return None
-        picked.append(max(bucket, key=lambda f: f[1])[0])
-    return picked
+@dataclass
+class Segment:
+    start: float                    # seconds on the montage clip
+    dur: float
+    src: float                      # where it starts in the recording (file timeline)
+    speed: float = 1.0              # > 1: a fast-forward shot
+    hit: float | None = None        # the block sound this slice is cut on (lands on a beat)
+    audio: float = 0.0              # seconds of game audio kept from `src`
+
+
+# Bars of the song, in beats. "hit" slices start just before a block sound so it lands on
+# the beat; "ramp" is one fast-forward shot that lands on the next beat with a hit.
+BARS = {
+    "chop":   [("hit", 1)] * 4,
+    "double": [("hit", 0.5)] * 8,
+    "build":  [("hit", 1), ("hit", 1)] + [("hit", 0.5)] * 4,
+    "ramp":   [("ramp", 2), ("hit", 1), ("hit", 1)],
+    "launch": [("ramp", 2)] + [("hit", 0.5)] * 4,
+}
+# Starts on beat cuts, speeds up, and keeps changing so it never feels mechanical.
+SEQUENCE = ["chop", "build", "ramp", "double", "launch", "double", "build", "ramp", "double", "chop"]
+RAMP_SPEED = 4.0
 
 
 @dataclass
@@ -219,41 +219,137 @@ class Plan:
     song: Path
     song_name: str
     song_start: float               # seconds into the song where the montage starts
-    beats: list[float]              # beat times on the montage clip (seconds); first one at PRE
-    hits: list[float]               # source time of each slice's hit (seconds in the recording)
+    segments: list[Segment]
     bpm: float
-    step: int                       # cut every `step` beats
+    bars: list[str]
 
     @property
     def seconds(self) -> float:
-        return self.beats[-1] - PRE
+        return self.segments[-1].start + self.segments[-1].dur
+
+    @property
+    def hits(self) -> list[float]:
+        return [g.hit for g in self.segments if g.hit is not None]
+
+    @property
+    def beats(self) -> list[float]:
+        """Where each block sound lands on the montage clip (all on the song's beat grid)."""
+        return [g.start + PRE for g in self.segments if g.hit is not None]
+
+    @property
+    def ramps(self) -> int:
+        return sum(1 for g in self.segments if g.speed > 1)
+
+
+def downbeat(env, fps: float, period: float, phase: float) -> int:
+    """Which beat of four starts a bar: the one the song accents most (kick and snare
+    patterns repeat every bar). 0-3, counted from `phase`."""
+    import numpy as np
+    acc = []
+    for j in range(4):
+        idx = []
+        k = j
+        while True:
+            t = phase + k * period - 0.75 * WIN / SR
+            i = int(round(t * fps))
+            if i >= len(env):
+                break
+            if i >= 0:
+                idx.append(i)
+            k += 4
+        acc.append(float(np.mean(env[idx])) if idx else 0.0)
+    return int(np.argmax(acc))
+
+
+def pattern(n_bars: int, half_ok: bool, ramps_ok: bool = True) -> list[str]:
+    out = []
+    for name in SEQUENCE:
+        if len(out) >= n_bars:
+            break
+        if not half_ok and name in ("double", "build", "launch"):
+            name = "chop" if name != "launch" else "ramp"
+        if not ramps_ok and name in ("ramp", "launch"):
+            name = "double" if half_ok else "chop"
+        out.append(name)
+    while len(out) < n_bars:
+        out.append(out[len(out) % len(SEQUENCE)])
+    return out
+
+
+def allocate(spec: list[tuple[str, float]], hits: list[float], sounds: list[float], first: int
+             ) -> list[Segment] | None:
+    """Give each slice its footage, in recording order, never reusing any. `hits` are the block
+    sounds to cut on (sorted), `sounds` every block sound found (so a slice's game audio stops
+    before the next one, which would land between the beats), `first` the hit to start from."""
+    import bisect
+    segs: list[Segment] = []
+    t_clip = 0.0
+    j = first
+    cursor = hits[first] - PRE - 1e-6 if hits else 0.0
+    for kind, dur in spec:
+        if kind == "hit":
+            while j < len(hits) and hits[j] - PRE < cursor:
+                j += 1
+            if j >= len(hits):
+                return None
+            h = hits[j]
+            src = h - PRE
+            k = bisect.bisect_right(sounds, h + 0.03)
+            nxt = sounds[k] if k < len(sounds) else None
+            audio = min(PRE + HIT_WINDOW, dur, (nxt - src - 0.02) if nxt is not None else 1e9)
+            segs.append(Segment(t_clip, dur, src, 1.0, h, max(audio, PRE + 0.06)))
+            cursor = src + dur
+            j += 1
+        else:
+            src = cursor + 0.05
+            segs.append(Segment(t_clip, dur, src, RAMP_SPEED))
+            cursor = src + dur * RAMP_SPEED
+        t_clip += dur
+    return segs
 
 
 def lay_out(hits: list[tuple[float, float]], song: Path, song_name: str, period: float, phase: float,
-            song_len: float, target: float = 15.0, skip_intro: float = 12.0) -> Plan | None:
-    """Fit a montage of about `target` seconds: cut on every beat for slow songs, every other
-    beat (or every fourth) for fast ones, since slices shorter than ~0.4 s start to strobe.
-    Starts on a beat past the song's intro when the song is long enough."""
-    step = 1
-    while period * step < 0.4:
-        step *= 2
-    slot = period * step
-    beat_times = [phase + k * period for k in range(int((song_len - phase) / period) + 1)]
-    for want in range(max(int(round(target / slot)), MIN_HITS), MIN_HITS - 1, -1):
-        length = slot * want
-        fits = [b for b in beat_times if b - PRE >= 0 and b + length + 0.3 <= song_len]
+            song_len: float, target: float = 15.0, skip_intro: float = 12.0, bar_offset: int = 0
+            ) -> Plan | None:
+    """Fit a montage of about `target` seconds in whole bars of the song, starting on a
+    downbeat. Cuts on the beat, on half beats, speeding up, with fast-forward shots in between;
+    for fast songs a 'beat' is two beats (slices under ~0.2 s strobe). Footage comes from the
+    busiest run of block sounds."""
+    u = period
+    while u < 0.4:
+        u *= 2
+    half_ok = u / 2 >= 0.2
+    bar = 4 * u
+    times = [t for t, _ in hits]
+    most = max(int(round(target / bar)), 2)
+    # In order: with fast-forward shots, from the busiest run (a slightly shorter montage is
+    # fine); then allowed to start a little earlier; only then without fast-forwards.
+    attempts = []
+    for ramps_ok in (True, False):
+        fewest = max(2, int(most * 0.6)) if ramps_ok else 2
+        for widen in (False, True):
+            attempts += [(ramps_ok, widen, n) for n in range(most, fewest - 1, -1)]
+    for ramps_ok, widen, n_bars in attempts:
+        names = pattern(n_bars, half_ok, ramps_ok)
+        spec = [(kind, beats * u) for name in names for kind, beats in BARS[name]]
+        need = sum(1 for kind, _ in spec if kind == "hit")
+        if need < MIN_HITS or len(hits) < need:
+            continue
+        length = n_bars * bar
+        downs = [phase + (bar_offset + 4 * k * round(u / period)) * period
+                 for k in range(int(song_len / bar) + 1)]
+        fits = [b for b in downs if b - PRE >= 0 and b + length + 0.3 <= song_len]
         if not fits:
             continue
-        first = next((b for b in fits if b >= skip_intro), fits[-1])
-        picked = None
-        for room in (1.3, 1.7, 2.2, 3.0):        # the busiest run first, widened until it fits
-            picked = choose(focus(hits, want, slot, room), [slot] * want)
-            if picked:
-                break
-        picked = picked or choose(hits, [slot] * want)
-        if picked:
-            beats = [PRE + slot * k for k in range(want + 1)]
-            return Plan(song, song_name, first - PRE, beats, picked, round(60.0 / period, 1), step)
+        first_beat = next((b for b in fits if b >= skip_intro), fits[-1])
+        run = focus(hits, need, sum(d for _, d in spec) / len(spec))
+        start = times.index(run[0][0]) if run else 0
+        # Widening goes back at most 15 s: never as far as a stray sound minutes earlier.
+        starts = [k for k in range(start, -1, -1) if times[start] - times[k] <= 15.0] if widen else [start]
+        for i in starts:
+            segs = allocate(spec, times, times, i)
+            if segs:
+                return Plan(song, song_name, first_beat - PRE, segs, round(60.0 / period, 1), names)
     return None
 
 
@@ -265,36 +361,40 @@ def render(plan: Plan, rec: Path, game_stream: int | None, dest: Path, fps, widt
            music_db: float, hit_gains: list[float] | None = None, log=None) -> tuple[Path, int]:
     """One clip: the slices back to back, the song, and each slice's hit. Returns (file, frames)."""
     fps = Fraction(fps)
-    cuts = [int(round((b - PRE) * fps)) for b in plan.beats]
+    segs = plan.segments
+    cuts = [int(round(g.start * fps)) for g in segs] + [int(round(plan.seconds * fps))]
     frames = cuts[-1] - cuts[0]
     total = frames / float(fps)
-    sig = (f"{rec}|{plan.song}|{plan.song_start:.3f}|{plan.hits}|{cuts}|{game_stream}|{music_db}|{hit_gains}|"
-           f"{fps}|{width}x{height}|v7")
+    sig = (f"{rec}|{plan.song}|{plan.song_start:.3f}|{[(g.src, g.dur, g.speed, g.audio) for g in segs]}|"
+           f"{game_stream}|{music_db}|{hit_gains}|{fps}|{width}x{height}|v8")
     dest = dest.with_name(f"{dest.stem}_{hashlib.sha1(sig.encode()).hexdigest()[:10]}.mp4")
     if dest.is_file():
         return dest, frames
     cmd = ["ffmpeg", "-y", "-v", "error"]
     filters, vlabels, alabels = [], [], []
-    n = len(plan.hits)
-    for k, t in enumerate(plan.hits):
+    gains = iter(hit_gains or [])
+    for k, g in enumerate(segs):
         f = cuts[k + 1] - cuts[k]
-        t0 = max(t - PRE, 0.0)
+        t0 = max(g.src, 0.0)
         # Rough seek, then exact trims on the file's own timestamps (same as decode()).
         cmd += ["-ss", f"{max(t0 - 3.0, 0):.3f}", "-copyts", "-i", str(rec)]
-        filters.append(f"[{k}:v]trim=start={t0:.4f},setpts=PTS-STARTPTS,fps={fps},"
+        speed = f",setpts=PTS/{g.speed:g}" if g.speed != 1 else ""
+        filters.append(f"[{k}:v]trim=start={t0:.4f},setpts=PTS-STARTPTS{speed},fps={fps},"
                        f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
                        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,trim=end_frame={f},"
                        f"setpts=PTS-STARTPTS[v{k}]")
         vlabels.append(f"[v{k}]")
-        if game_stream is not None:
+        if game_stream is not None and g.hit is not None:
             delay = int(round(cuts[k] / float(fps) * 1000))
-            g = (hit_gains[k] if hit_gains else 0.0)
-            filters.append(f"[{k}:a:{game_stream}]atrim=start={t0:.4f}:end={t0 + PRE + HIT_WINDOW:.4f},"
+            gain = next(gains, 0.0)
+            fade = min(0.04, g.audio / 3)
+            filters.append(f"[{k}:a:{game_stream}]atrim=start={t0:.4f}:end={t0 + g.audio:.4f},"
                            f"asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,"
-                           f"volume={g:.1f}dB,"
-                           f"afade=t=in:d=0.02,afade=t=out:st={PRE + HIT_WINDOW - 0.15:.3f}:d=0.15,"
+                           f"volume={gain:.1f}dB,afade=t=in:d=0.005,"
+                           f"afade=t=out:st={max(g.audio - fade, 0):.3f}:d={fade:.3f},"
                            f"adelay={delay}|{delay}[h{k}]")
             alabels.append(f"[h{k}]")
+    n = len(segs)
     cmd += ["-ss", f"{max(plan.song_start - 3.0, 0):.3f}", "-copyts", "-i", str(plan.song)]
     filters.append(f"[{n}:a]atrim=start={plan.song_start:.4f}:end={plan.song_start + total + 0.1:.4f},"
                    f"asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,volume={music_db:.1f}dB,"
@@ -405,11 +505,14 @@ def make(rec: Path, game_stream: int | None, start: float, end: float, song, fps
     m = decode(Path(song.path), 0.0, window)
     menv, mfps = onset_envelope(m, low_only=True)
     period, phase = beat_grid(menv, mfps, _bpm(getattr(song, "bpm", "")))
-    plan = lay_out(hits, Path(song.path), song.name, period, phase, window, target)
+    fenv, _ = onset_envelope(m)
+    plan = lay_out(hits, Path(song.path), song.name, period, phase, window, target,
+                   bar_offset=downbeat(fenv, mfps, period, phase))
     if plan is None:
         log("Montage skipped: the hits are too close together to fill the beats")
         return None
     gains = hit_gains(rec, game_stream, plan.hits)
     file, frames = render(plan, rec, game_stream, dest, fps, width, height, music_db, gains, log=log)
+    ramps = f" and {plan.ramps} fast-forward shots" if plan.ramps else ""
     return Result(file, frames, plan, end - start,
-                  f"{len(plan.hits)} cuts on the beat of {song.name} ({plan.bpm:g} BPM)")
+                  f"{len(plan.hits)} cuts{ramps} on the beat of {song.name} ({plan.bpm:g} BPM)")
