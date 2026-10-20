@@ -206,7 +206,7 @@ class EndToEnd(unittest.TestCase):
     def test_edit_is_shorter(self):
         story = self.result["final_seconds"] - self.result["end_screen_seconds"]
         self.assertLess(story, self.result["raw_seconds"] * 0.6)
-        self.assertEqual(self.result["placed"], {"broll": 1, "overlay": 1, "sfx": 1, "music": 1, "timelapse": 0, "fast": 0})
+        self.assertEqual(self.result["placed"], {"broll": 1, "overlay": 1, "sfx": 1, "music": 1, "timelapse": 0, "fast": 0, "montage": 0})
 
     def test_fcpxml_is_valid_and_frame_accurate(self):
         root = ET.fromstring(self.xml.split("<!DOCTYPE fcpxml>", 1)[1])
