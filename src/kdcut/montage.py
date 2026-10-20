@@ -308,6 +308,65 @@ def allocate(spec: list[tuple[str, float]], hits: list[float], sounds: list[floa
     return segs
 
 
+def active(times: list[float], near: float = 5.0, company: int = 2) -> list[float]:
+    """Block sounds that are part of real building or mining: at least `company` others within
+    `near` seconds. A lone one (a log broken between bites of food) doesn't count."""
+    import bisect
+    out = []
+    for t in times:
+        lo, hi = bisect.bisect_left(times, t - near), bisect.bisect_right(times, t + near)
+        if hi - lo - 1 >= company:
+            out.append(t)
+    return out
+
+
+def spread(names: list[str], u: float, times: list[float], sounds: list[float]) -> list[Segment] | None:
+    """Lay the bars across the whole stretch so the montage shows progress from start to
+    finish. The block sounds are shared out in order (bar 1 gets the first share, the last bar
+    the last), so idle time (eating, walking, sorting chests, AFK) holds no slices and is
+    skipped; within its share a bar's cuts are spread out too. A fast-forward shot shows the lead-up
+    to the next cut at 4x."""
+    import bisect
+    n_bars = len(names)
+    times = active(times)
+    if not times:
+        return None
+    bounds = [round(k * len(times) / n_bars) for k in range(n_bars + 1)]
+    segs: list[Segment] = []
+    t_clip = 0.0
+    cursor = times[0] - PRE - 1e-6
+    for b, name in enumerate(names):
+        share = times[bounds[b]:bounds[b + 1]]
+        spec = [(kind, beats * u) for kind, beats in BARS[name]]
+        m = sum(1 for kind, _ in spec if kind == "hit")
+        if len(share) < m:
+            return None
+        aims = [share[int(k * len(share) / m)] for k in range(m)]    # evenly through the share
+        k = 0
+        for idx, (kind, dur) in enumerate(spec):
+            if kind == "hit":
+                lo = bisect.bisect_left(times, max(aims[k], cursor + PRE))
+                if lo >= len(times):
+                    return None
+                h = times[lo]
+                src = h - PRE
+                nxt_i = bisect.bisect_right(sounds, h + 0.03)
+                nxt = sounds[nxt_i] if nxt_i < len(sounds) else None
+                audio = min(PRE + HIT_WINDOW, dur, (nxt - src - 0.02) if nxt is not None else 1e9)
+                segs.append(Segment(t_clip, dur, src, 1.0, h, max(audio, PRE + 0.06)))
+                cursor = src + dur
+                k += 1
+            else:
+                # The lead-up to the next cut, sped up: that's where the building is happening
+                # (from wherever the last cut ended could be walking or eating).
+                target = (aims[k] if k < m else share[-1]) - PRE
+                src = max(cursor + 0.05, target - dur * RAMP_SPEED)
+                segs.append(Segment(t_clip, dur, src, RAMP_SPEED))
+                cursor = src + dur * RAMP_SPEED
+            t_clip += dur
+    return segs
+
+
 def lay_out(hits: list[tuple[float, float]], song: Path, song_name: str, period: float, phase: float,
             song_len: float, target: float = 15.0, skip_intro: float = 12.0, bar_offset: int = 0
             ) -> Plan | None:
@@ -324,12 +383,25 @@ def lay_out(hits: list[tuple[float, float]], song: Path, song_name: str, period:
     most = max(int(round(target / bar)), 2)
     # In order: with fast-forward shots, from the busiest run (a slightly shorter montage is
     # fine); then allowed to start a little earlier; only then without fast-forwards.
-    attempts = []
+    attempts = [("spread", n) for n in range(most, 1, -1)]      # first choice: the whole stretch
     for ramps_ok in (True, False):
         fewest = max(2, int(most * 0.6)) if ramps_ok else 2
         for widen in (False, True):
             attempts += [(ramps_ok, widen, n) for n in range(most, fewest - 1, -1)]
-    for ramps_ok, widen, n_bars in attempts:
+    for attempt in attempts:
+        if attempt[0] == "spread":
+            n_bars = attempt[1]
+            names = pattern(n_bars, half_ok, True)
+            length = n_bars * bar
+            downs = [phase + (bar_offset + 4 * k * round(u / period)) * period
+                     for k in range(int(song_len / bar) + 1)]
+            fits = [b for b in downs if b - PRE >= 0 and b + length + 0.3 <= song_len]
+            segs = spread(names, u, times, times) if fits else None
+            if segs:
+                first_beat = next((b for b in fits if b >= skip_intro), fits[-1])
+                return Plan(song, song_name, first_beat - PRE, segs, round(60.0 / period, 1), names)
+            continue
+        ramps_ok, widen, n_bars = attempt
         names = pattern(n_bars, half_ok, ramps_ok)
         spec = [(kind, beats * u) for name in names for kind, beats in BARS[name]]
         need = sum(1 for kind, _ in spec if kind == "hit")
@@ -366,7 +438,7 @@ def render(plan: Plan, rec: Path, game_stream: int | None, dest: Path, fps, widt
     frames = cuts[-1] - cuts[0]
     total = frames / float(fps)
     sig = (f"{rec}|{plan.song}|{plan.song_start:.3f}|{[(g.src, g.dur, g.speed, g.audio) for g in segs]}|"
-           f"{game_stream}|{music_db}|{hit_gains}|{fps}|{width}x{height}|v8")
+           f"{game_stream}|{music_db}|{hit_gains}|{fps}|{width}x{height}|v9")
     dest = dest.with_name(f"{dest.stem}_{hashlib.sha1(sig.encode()).hexdigest()[:10]}.mp4")
     if dest.is_file():
         return dest, frames

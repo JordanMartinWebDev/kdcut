@@ -184,6 +184,25 @@ class DetectionTests(unittest.TestCase):
             self.assertLess(g.src + g.audio, nxt)
             self.assertLessEqual(g.audio, g.dur + 1e-9)
 
+    def test_long_build_shows_progress_start_to_finish(self):
+        import random
+        r = random.Random(1)
+        hits, t, bursts = [(3.0, 1.0)], 10.0, []        # a lone sound, then 10 minutes of bursts
+        while t < 600:
+            bursts.append(t)
+            for _ in range(r.randint(10, 40)):
+                hits.append((round(t, 2), 1.0))
+                t += r.uniform(0.3, 0.8)
+            t += r.uniform(10, 40)                       # eating, walking, chests: no block sounds
+        plan = self.m.lay_out(hits, Path("s.wav"), "S", 60 / 130, 0.1, 136.0)
+        self.assertNotIn(3.0, plan.hits)                 # the lone sound isn't building
+        self.assertLess(plan.hits[0], 60)                # starts near the start of the build...
+        self.assertGreater(plan.hits[-1], 540)           # ...and ends near the end
+        firsts = [g.hit for g in plan.segments if g.hit][::5]
+        self.assertEqual(firsts, sorted(firsts))
+        for a, b in zip(plan.segments, plan.segments[1:]):
+            self.assertGreaterEqual(b.src + 1e-6, a.src + a.dur * a.speed)
+
     def test_fast_songs_cut_less_often(self):
         hits = self.run_of()
         plan = self.m.lay_out(hits, Path("s.wav"), "S", 60 / 170, 0.1, 120.0)
