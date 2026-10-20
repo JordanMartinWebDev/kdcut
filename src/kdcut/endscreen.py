@@ -23,8 +23,11 @@ from kdcut import thumbnails
 
 REF_W, REF_H = 1920, 1080
 # Element boxes in 1920x1080 space: (x, y, w, h). Video slots are 16:9.
-SLOTS = [(100, 150, 704, 396), (100, 640, 704, 396)]
-SUBSCRIBE = (868, 430, 220, 220)       # circle bounding box
+# Inside YouTube's safe area: the editor won't place elements in the outer ~10% of the frame
+# (the bottom one stopped about 85% of the way down), and a video element is at most about
+# 613 px wide at 1080p. Slightly smaller boxes leave room to drag them into place.
+SLOTS = [(192, 170, 576, 324), (192, 556, 576, 324)]
+SUBSCRIBE = (850, 376, 298, 298)       # circle bounding box: YouTube's subscribe circle
 DEFAULT_LABELS = ["WATCH NEXT", "MORE {series}"]
 
 
@@ -320,6 +323,7 @@ def studio_steps(es: EndScreen, seconds: float) -> list[str]:
         f"The last {seconds:.0f}s of the video is the end screen.",
         "YouTube Studio > Content > the video > Editor > End screen.",
         "First video only: add Video (Most recent upload) on the top box, Video (Best for viewer) or "
-        "your series Playlist on the bottom box, and Subscribe on the circle. Drag each onto its spot.",
+        "your series Playlist on the bottom box, and Subscribe on the circle. Drag each onto its spot "
+        "and drag a corner to shrink the video boxes until they sit inside the white borders.",
         "Every video after that: End screen > Import from video > pick the last one. Done.",
     ]

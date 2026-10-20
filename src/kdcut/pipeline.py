@@ -20,7 +20,7 @@ from pathlib import Path
 
 from kdcut import blocks as blocks_mod
 from kdcut import audioprep, captions, graphics, vad, ducking, fcpxml, media, metadata, music, planner, transcribe, vision
-from kdcut import signals as signals_mod, speedup, story
+from kdcut import montage as montage_mod, signals as signals_mod, speedup, story
 from kdcut import timelapse as timelapse_mod
 from kdcut.assets import AssetIndex
 from kdcut.blocks import fmt_ts
@@ -335,7 +335,63 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     for a, b in zip(blocks, blocks[1:]):
         if a.source == b.source:
             next_block[a.id] = b
-    for item in plan.fast:
+    # Montages: building/mining cut to the beat of a song. Falls back to a fast-forward when
+    # the stretch hasn't enough clear game sounds, there's no music, or numpy is missing.
+    fast_items = list(plan.fast)
+    montage_info: dict[int, montage_mod.Result] = {}
+    montage_songs: set[str] = set()
+    matcher = None
+    if plan.montage and bool(ed.get("montages", True)):
+        try:
+            from kdcut import mcsounds
+            matcher = mcsounds.Matcher.load(mcsounds.find_assets(ed.get("minecraft_assets") or None), log=r.log)
+            if matcher is None:
+                tl_notes.append("Montages became fast-forwards: Minecraft's sound files weren't found (set "
+                                "edit.minecraft_assets to your launcher's assets folder)")
+        except ImportError:
+            matcher = None
+        for n, item in enumerate(plan.montage[:int(ed.get("max_montages", 2))]):
+            b = by_id.get(item.get("id"))
+            if b is None:
+                continue
+            span = speedup.source_span(b, next_block.get(b.id), float(item["seconds"]), ed,
+                                       plan.extend.get(b.id, 0.0), durations[b.source], voices.get(b.source))
+            if span is None:
+                continue
+            r.check()
+            res = None
+            song = montage_mod.pick_song(offered, history, seed=len(blocks) + n, used=montage_songs)
+            if song is not None:
+                try:
+                    rec_path, info = recordings[b.source], infos[b.source]
+                    sig = signals_mod.measure(Path(rec_path), info, cfg["whisper"].get("mic_track", "auto"),
+                                              work, log=r.log)
+                    r.log(f"Cutting {span[1] - span[0]:.0f}s after {b.id} into a montage to {song.name}")
+                    vol = float(mcfg.get("volume_db", -20))
+                    res = montage_mod.make(Path(rec_path), vision.game_audio_track(info, cfg["whisper"].get("mic_track", "auto")),
+                                           span[0], span[1], song, fps, width, height,
+                                           work / "montage" / f"montage_{b.id}.mp4",
+                                           music_db=audioprep.music_gain(Path(song.path)) + max(vol + 16.0, -8.0),
+                                           sig=sig, target=float(ed.get("montage_seconds", 15)),
+                                           matcher=matcher, log=r.log,
+                                           punch=float(ed.get("montage_punch", 0.06) or 0.0))
+                except ImportError:
+                    r.log("Montage skipped: numpy isn't available")
+                except media.MediaError as exc:
+                    r.log(f"Montage after {b.id} skipped: {exc}")
+            if res is None:            # show the stretch as a fast-forward instead
+                real = span[1] - span[0]
+                fast_items.append({"id": b.id, "seconds": real, "speed": round(min(max(real / 12.0, 3.0), 12.0), 1),
+                                   "reason": (item.get("reason") or "") + " (montage fallback)"})
+                continue
+            montage_songs.add(song.path)
+            clip = Clip(path=res.file, src_in=0, dur=res.frames, rec=0, role="montage",
+                        name=f"Montage - {song.title}")
+            montage_info[id(clip)] = res
+            insert_clips.setdefault(b.id, []).append(clip)
+    done_ids = {bid for bid, clips in insert_clips.items() if any(c.role == "montage" for c in clips)}
+    fast_items = [f for f in fast_items if f.get("id") not in done_ids]   # one treatment per stretch
+    for item in fast_items:
         b = by_id.get(item.get("id"))
         if b is None:
             continue
@@ -421,7 +477,17 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     sfx_lane = min(int(tcfg["sfx_lane"]), music_lane - 1)
     cache = Path(cfg["assets"]["cache_dir"]).expanduser() / "converted"
     review: list[str] = []
-    placed = {"broll": 0, "overlay": 0, "sfx": 0, "music": 0, "timelapse": 0, "fast": 0}
+    placed = {"broll": 0, "overlay": 0, "sfx": 0, "music": 0, "timelapse": 0, "fast": 0, "montage": 0}
+    montage_spans: list[tuple[float, float]] = []
+    for clip in tl.main:
+        m = montage_info.get(id(clip))
+        if m is None:
+            continue
+        placed["montage"] += 1
+        montage_spans.append((tl.seconds(clip.rec), tl.seconds(clip.rec_end)))
+        tl.markers.append(Marker(rec=clip.rec, name=f"Montage: {m.plan.song_name}", kind="note"))
+        review.append(f"{fmt_ts(tl.seconds(clip.rec))}  Montage: {m.real_seconds:.0f}s of gameplay as {m.note}, "
+                      f"{tl.seconds(clip.dur):.0f}s")
     for clip in tl.main:
         f = fast_info.get(id(clip))
         if f is None:
@@ -640,7 +706,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         bed = None
         if pieces and mcfg.get("duck", True):
             # One pre-mixed music bed that dips under your voice.
-            gains = ducking.envelope(speech, total, talk_db=talk_db, gap_db=gap_db)
+            gains = ducking.envelope(speech, total, talk_db=talk_db, gap_db=gap_db, silent=montage_spans)
             try:
                 r.log("Mixing the music so it dips while you talk")
                 bed = ducking.render_bed(pieces, total, gains, out / "music_bed.m4a", start=music_start,
@@ -663,7 +729,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
                                          role="music", name=pc.track.name,
                                          volume_db=round(vol + 4.0 + lvl, 1)))
         placed["music"] = len(pieces)
-        music.record_use([pc.track.path for pc in pieces])
+        music.record_use([pc.track.path for pc in pieces] + sorted(montage_songs))
 
     stem = _safe(name)
     xml_path = fcpxml.write(tl, out / f"{stem}.fcpxml", event=cfg["channel"].get("name") or "kdcut")
@@ -689,7 +755,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         f"- Raw footage: {fmt_ts(raw_total)}  ->  edit: {fmt_ts(final)} "
         f"({100 * final / raw_total:.0f}% kept)" if raw_total else "",
         f"- Clips on the main track: {len(tl.main)}",
-        f"- Placed: {placed['timelapse']} timelapses, {placed['fast']} fast-forwards, {placed['broll']} B-roll, {placed['overlay']} overlays, "
+        f"- Placed: {placed['timelapse']} timelapses, {placed['montage']} montages, {placed['fast']} fast-forwards, {placed['broll']} B-roll, {placed['overlay']} overlays, "
         f"{placed['sfx']} sound effects",
         f"- Timeline: `{xml_path.name}` ({float(fps):.2f} fps, {width}x{height})", "",
         "## How to open it",

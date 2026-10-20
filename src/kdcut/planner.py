@@ -16,6 +16,7 @@ class Plan:
     drop: dict[str, str] = field(default_factory=dict)      # block id -> reason
     extend: dict[str, float] = field(default_factory=dict)  # block id -> seconds of silent gameplay to keep after it
     fast: list[dict] = field(default_factory=list)          # {id, seconds, speed, reason}: sped-up quiet stretch after a block
+    montage: list[dict] = field(default_factory=list)       # {id, seconds, reason}: quiet stretch cut to the beat of a song
     broll: list[dict] = field(default_factory=list)         # {file, at, duration, reason}
     overlays: list[dict] = field(default_factory=list)      # {at, query, duration}
     sfx: list[dict] = field(default_factory=list)           # {at, query, when}
@@ -33,7 +34,7 @@ class Plan:
         return cls(**{k: v for k, v in data.items() if k in known})
 
 
-RULES_VERSION = 5     # bump when the editing rules change, so saved plans are redone
+RULES_VERSION = 6     # bump when the editing rules change, so saved plans are redone
 
 
 def blocks_key(blocks: list[Block]) -> str:
@@ -179,6 +180,17 @@ SCHEMA = {
                 "reason": {"type": "string", "description": "2-6 words, e.g. 'walk back to base'"},
             }, "required": ["id", "seconds", "speed"]},
         },
+        "montage": {
+            "type": "array",
+            "description": "At most 2 per video: a hands-on quiet stretch (building, mining, clearing "
+                           "land, farming) cut into a beat-synced montage, block sounds on the beat.",
+            "items": {"type": "object", "properties": {
+                "id": {"type": "string", "description": "The block the quiet stretch follows."},
+                "seconds": {"type": "number", "minimum": 20, "maximum": 900,
+                            "description": "How much of the quiet stretch to use (real seconds)."},
+                "reason": {"type": "string", "description": "2-6 words, e.g. 'building the walls'"},
+            }, "required": ["id", "seconds"]},
+        },
         "broll": {
             "type": "array",
             "description": "Place one of the provided B-roll files over the gameplay while the commentary continues.",
@@ -295,6 +307,10 @@ def system_prompt(cfg: dict, video: dict) -> str:
         "farming), use fast instead of cutting: the viewer sees it happen in a few seconds "
         "(speed 3-8, ending up 3-15 s on screen). Cut stretches that are mostly menus, AFK or "
         "nothing at all. Never use fast for a stretch with talking in it.",
+        "- Montage: for the one or two best hands-on stretches (building, mining, clearing land, "
+        "with hits and action, few menus, at least ~40s long), use montage instead of fast: the "
+        "stretch is cut to the beat of a song with the block sounds on the beat. Travel and walking "
+        "stay fast. Never more than 2 per video; never where the creator talks.",
         "- Lines starting with [on screen ...] describe what was happening during a stretch "
         "where the creator wasn't talking (action 0 = nothing, 3 = intense). For action 2-3, "
         "keep that gameplay with an extend on the block just before it (up to 60s). Action 0-1 "
@@ -460,6 +476,12 @@ def make_plan(blocks: list[Block], recordings: list[Path], cfg: dict, video: dic
         for e in result.get("extend", []):
             if e.get("id") in chunk_ids:
                 plan.extend[e["id"]] = float(min(max(e.get("seconds", 0), 0), 60))
+        for m in result.get("montage", []):
+            item = clean_fast({**m, "speed": 4}, chunk_ids, (quiet_seconds or {}))
+            if item and len(plan.montage) < 2 and all(x["id"] != item["id"] for x in plan.montage):
+                plan.montage.append({"id": item["id"], "seconds": float(min(float(m.get("seconds", 0)),
+                                                                            (quiet_seconds or {}).get(item["id"], 1e9))),
+                                     "reason": item["reason"]})
         for f in result.get("fast", []):
             item = clean_fast(f, chunk_ids, (quiet_seconds or {}))
             if item and all(x["id"] != item["id"] for x in plan.fast):

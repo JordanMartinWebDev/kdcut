@@ -31,7 +31,8 @@ def merge(intervals: list[tuple[float, float]], gap: float = 1.2) -> list[tuple[
 
 
 def envelope(speech: list[tuple[float, float]], total: float, talk_db: float, gap_db: float,
-             attack: float = 0.25, release: float = 0.8) -> list[float]:
+             attack: float = 0.25, release: float = 0.8,
+             silent: list[tuple[float, float]] = ()) -> list[float]:
     """Linear gain per 1/RATE second: talk_db under speech, gap_db elsewhere, with ramps
     that start *before* you speak (so the first word is never covered) and ease back up."""
     n = int(total * RATE) + 1
@@ -49,7 +50,20 @@ def envelope(speech: list[tuple[float, float]], total: float, talk_db: float, ga
         for i in range(i1 + 1, r1 + 1):   # ease back up after speaking
             frac = (i - b * RATE) / max(release * RATE, 1)
             db[i] = min(db[i], talk_db + depth * max(0.0, min(frac, 1.0)))
-    return [10 ** (d / 20) for d in db]
+    gains = [10 ** (d / 20) for d in db]
+    # No bed under clips with their own music (montages): fade out just before, back after.
+    ramp = int(0.4 * RATE)
+    for a, b in silent:
+        i0, i1 = max(int(a * RATE), 0), min(int(b * RATE), n - 1)
+        for i in range(max(i0 - ramp, 0), min(i1 + ramp, n - 1) + 1):
+            if i < i0:
+                f = (i0 - i) / ramp
+            elif i > i1:
+                f = (i - i1) / ramp
+            else:
+                f = 0.0
+            gains[i] *= min(f, 1.0)
+    return gains
 
 
 def _write_env(gains: list[float], path: Path) -> None:
