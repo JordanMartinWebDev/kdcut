@@ -19,7 +19,7 @@ import tomllib
 from pathlib import Path
 
 from kdcut import blocks as blocks_mod
-from kdcut import audioprep, broll as broll_mod, captions, graphics, vad, ducking, fcpxml, media, metadata, music, planner, transcribe, vision
+from kdcut import audioprep, broll as broll_mod, captions, clues, continuity, graphics, vad, ducking, fcpxml, media, metadata, music, planner, transcribe, vision
 from kdcut import montage as montage_mod, signals as signals_mod, speedup, story
 from kdcut import timelapse as timelapse_mod
 from kdcut.assets import AssetIndex
@@ -139,8 +139,12 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
                                      max_seconds=float(ed["max_block_seconds"]))
     cues = [b for b in blocks if b.cue]
     r.log(f"{len(blocks)} speech blocks, {len(cues)} spoken cue(s)")
+    n_build, n_skip = clues.mark(blocks)
+    if n_build or n_skip:
+        r.log(f"Heard {n_build} build cue(s) and {n_skip} time skip(s)")
+    silent = speedup.silent_clips(blocks, len(recordings))       # block id -> clips with no talking after it
     (out / "transcript.txt").write_text(
-        planner.format_blocks(blocks, recordings), encoding="utf-8")
+        planner.format_blocks(blocks, recordings, durations=[i.duration for i in infos]), encoding="utf-8")
 
     # 3. Plan -----------------------------------------------------------------------
     index = AssetIndex.load(Path(cfg["assets"]["index_path"]))
@@ -214,13 +218,23 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
                 sigs[src] = signals_mod.measure(Path(rec_path), info, cfg["whisper"].get("mic_track", "auto"),
                                                 work, log=r.log)
             measured = signals_mod.describe(blocks, sigs, voices, durations)
+            for bid, srcs in silent.items():
+                # Clips with no talking after this line are part of its quiet stretch.
+                extra = sum(durations[q] for q in srcs)
+                measured.quiet_seconds[bid] = measured.quiet_seconds.get(bid, 0.0) + extra
+                if bid in measured.quiet:
+                    measured.quiet[bid] = (measured.quiet[bid].rstrip("]")
+                                           + f" · plus {len(srcs)} clip(s) with no talking, {extra:.0f}s]")
+                else:
+                    measured.quiet[bid] = f"[quiet after: {len(srcs)} clip(s) with no talking, {extra:.0f}s]"
         except Cancelled:
             raise
         except Exception as exc:     # the numbers help; the edit works without them
             r.log(f"Footage measurements skipped: {exc}")
         outline = None
         try:
-            outline = story.outline(cfg, video, blocks, call, cache=out / "story.json", log=r.log, force=replan)
+            outline = story.outline(cfg, video, blocks, call, cache=out / "story.json", log=r.log, force=replan,
+                                    notes=notes, durations=durations)
         except Cancelled:
             raise
         except Exception as exc:
@@ -237,7 +251,8 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
                 r.log(f"B-roll not looked at (file names only): {exc}")
         plan = planner.make_plan(blocks, recordings, cfg, video, broll, vocab, caller=call,
                                  log=r.log, notes=plan_notes, measured=measured.block_tags,
-                                 outline=outline, quiet_seconds=measured.quiet_seconds)
+                                 outline=outline, quiet_seconds=measured.quiet_seconds,
+                                 durations=durations)
         notes = plan_notes
         plan.save(plan_file)
     else:
@@ -248,7 +263,9 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
 
     # Short cut bits said in one breath with kept talk can't be cut cleanly: keep them.
     # (Applied on every run, so saved plans benefit too.)
+    planner.protect_sentences(plan, blocks)         # incl. sentences carried across clips
     glued = planner.protect_joins(plan, blocks, voices)
+    plan.notes += clues.enforce(plan, blocks)       # waits he skips ("it's nighttime") are cut
     if glued:
         r.log(f"Kept {len(glued)} short bit(s) that couldn't be cut cleanly")
 
@@ -256,6 +273,104 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     # decided now, before the timeline is built. Cached alongside plan.json.
     by_id = {b.id: b for b in blocks}
     kept_ids = [bid for rng in kept_ranges(blocks, plan, durations, ed, voices) for bid in rng.block_ids]
+
+    # Where the timelapses go (decided on the finished story, cached like the packaging).
+    tl_inserts: dict[str, list] = {}
+    tl_notes: list[str] = []
+    if timelapses:
+        kept_blocks = [by_id[i] for i in kept_ids]
+        loose_text = [(p.name, " ".join(w.text.strip() for w in vo_words[str(p)])) for p in loose_vo]
+        if use_ai:
+            tl_file = out / "timelapses.json"
+            key = timelapse_mod.cache_key(kept_blocks, timelapses, loose_text)
+            saved = json.loads(tl_file.read_text(encoding="utf-8")) if tl_file.is_file() else {}
+            placements = saved.get("placements") if saved.get("key") == key else None
+            if placements is None:
+                r.log("Finding the spot for each timelapse")
+                try:
+                    placements = timelapse_mod.place(cfg, video, kept_blocks, timelapses, loose_text, call)
+                    tl_file.write_text(json.dumps({"key": key, "placements": placements}, indent=2,
+                                                  ensure_ascii=False), encoding="utf-8")
+                except Exception as exc:
+                    r.log(f"Couldn't place the timelapses with the AI ({exc}); they go at the end")
+                    placements = []
+            tl_inserts, tl_notes = timelapse_mod.resolve(placements, timelapses, loose_vo, set(kept_ids))
+        else:
+            tl_inserts, tl_notes = timelapse_mod.place_without_ai(timelapses, loose_vo)
+        for t in timelapses:          # voiceovers the AI (or the order) matched
+            if t.voiceover is not None and not t.vo_words:
+                t.vo_words = vo_words.get(str(t.voiceover), [])
+
+
+    # Watch the edit as a viewer: bring back lines the story needs, move misplaced timelapses.
+    view_notes: list[str] = []
+    if use_ai and ed.get("viewer_pass", True):
+        cont_file = out / "continuity.json"
+        tl_where = {t.name: after for after, ts in tl_inserts.items() for t in ts}
+        cont_key = continuity.cache_key(plan, tl_where)
+        saved = json.loads(cont_file.read_text(encoding="utf-8")) if cont_file.is_file() else {}
+        if saved.get("key") == cont_key:
+            fixes = continuity.Fixes(**saved["fixes"])
+        else:
+            r.log("Watching the edit as a viewer")
+            inserts_text: dict[str, list[str]] = {}
+            for after, ts in tl_inserts.items():
+                for t in ts:
+                    inserts_text.setdefault(after, []).append(f"TIMELAPSE {t.name} ({t.duration:.0f}s) plays here")
+            for f in plan.fast:
+                inserts_text.setdefault(f["id"], []).append(f"fast-forward: {f.get('reason', '')}")
+            for m in plan.montage:
+                inserts_text.setdefault(m["id"], []).append(f"montage: {m.get('reason', '')}")
+            for bid, secs in plan.extend.items():
+                inserts_text.setdefault(bid, []).append(f"keeps {secs:.0f}s of gameplay after this line")
+            outline_now = story.cached(out / "story.json", blocks)
+            try:
+                fixes = continuity.check(cfg, video, blocks, dict(plan.drop), durations, call, notes=notes,
+                                         inserts=inserts_text, outline_text=outline_now.text() if outline_now else "",
+                                         timelapse_files=[t.name for t in timelapses],
+                                         window=max(int(cfg["llm"].get("window_blocks", 600)), 50), log=r.log)
+                cont_file.write_text(json.dumps({"key": cont_key, "fixes": fixes.__dict__}, indent=2,
+                                                ensure_ascii=False), encoding="utf-8")
+            except Cancelled:
+                raise
+            except Exception as exc:
+                r.log(f"Viewer pass skipped: {exc}")
+                fixes = continuity.Fixes()
+        back = continuity.apply(plan, fixes, blocks)
+        if back:
+            planner.protect_sentences(plan, blocks)
+            planner.protect_joins(plan, blocks, voices)
+            r.log(f"Brought back {len(back)} line(s) the story needs")
+            for x in fixes.restore:
+                if x["id"] in back:
+                    view_notes.append(f"Kept {x['id']}: {x['why']}")
+        if fixes.moves and timelapses:
+            by_name = {t.name: t for t in timelapses}
+            for mv in fixes.moves:
+                t = by_name.get(mv["file"])
+                if t is None:
+                    continue
+                for after in list(tl_inserts):
+                    if t in tl_inserts[after]:
+                        tl_inserts[after].remove(t)
+                        if not tl_inserts[after]:
+                            del tl_inserts[after]
+                tl_inserts.setdefault(mv["after"], []).append(t)
+                view_notes.append(f"Moved timelapse {t.name} after {mv['after']}: {mv['why']}")
+        view_notes += [f"Check: {p}" for p in fixes.problems]
+        plan.notes += view_notes
+        kept_ids = [bid for rng in kept_ranges(blocks, plan, durations, ed, voices) for bid in rng.block_ids]
+        # A timelapse placed after a line that's still cut goes after the next kept line.
+        for after in list(tl_inserts):
+            if after != "__end__" and after not in kept_ids:
+                k = nearest_kept(after, blocks, {i: 0 for i in kept_ids})
+                moved = tl_inserts.pop(after)
+                tl_inserts.setdefault(k or "__end__", []).extend(moved)
+
+    # Packaging needs to know where timelapses play (they get upbeat music).
+    for after, ts in tl_inserts.items():
+        for t in ts:
+            notes = {**notes, after: list(notes.get(after, [])) + [f"[TIMELAPSE plays here: {t.name}, {t.duration:.0f}s]"]}
     want_cold_open = bool(video.get("cold_open", ed.get("cold_open", True)))
     history = music.load_history()
     # The channel's music feel decides what the AI may pick from: nothing sad ever, and in the
@@ -304,33 +419,6 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         md.cold_open, prefix, teaser_level, teaser_note = _pick_cold_open(
             md, by_id, kept_ids, recordings, words, durations, voices, log=r.log)
 
-    # Where the timelapses go (decided on the finished story, cached like the packaging).
-    tl_inserts: dict[str, list] = {}
-    tl_notes: list[str] = []
-    if timelapses:
-        kept_blocks = [by_id[i] for i in kept_ids]
-        loose_text = [(p.name, " ".join(w.text.strip() for w in vo_words[str(p)])) for p in loose_vo]
-        if use_ai:
-            tl_file = out / "timelapses.json"
-            key = timelapse_mod.cache_key(kept_blocks, timelapses, loose_text)
-            saved = json.loads(tl_file.read_text(encoding="utf-8")) if tl_file.is_file() else {}
-            placements = saved.get("placements") if saved.get("key") == key else None
-            if placements is None:
-                r.log("Finding the spot for each timelapse")
-                try:
-                    placements = timelapse_mod.place(cfg, video, kept_blocks, timelapses, loose_text, call)
-                    tl_file.write_text(json.dumps({"key": key, "placements": placements}, indent=2,
-                                                  ensure_ascii=False), encoding="utf-8")
-                except Exception as exc:
-                    r.log(f"Couldn't place the timelapses with the AI ({exc}); they go at the end")
-                    placements = []
-            tl_inserts, tl_notes = timelapse_mod.resolve(placements, timelapses, loose_vo, set(kept_ids))
-        else:
-            tl_inserts, tl_notes = timelapse_mod.place_without_ai(timelapses, loose_vo)
-        for t in timelapses:          # voiceovers the AI (or the order) matched
-            if t.voiceover is not None and not t.vo_words:
-                t.vo_words = vo_words.get(str(t.voiceover), [])
-
     # 4. Timeline -------------------------------------------------------------------
     r.check()
     r.step(3, "Building timeline")
@@ -342,6 +430,26 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     for a, b in zip(blocks, blocks[1:]):
         if a.source == b.source:
             next_block[a.id] = b
+    def stretch(b, seconds: float):
+        """(recording, info, start, end) of the quiet stretch after a block. When clips with no
+        talking follow it, that's where the work is: they're joined into one file."""
+        span = speedup.source_span(b, next_block.get(b.id), seconds, ed, plan.extend.get(b.id, 0.0),
+                                   durations[b.source], voices.get(b.source))
+        srcs = silent.get(b.id)
+        if srcs and (span is None or span[1] - span[0] < 10.0):
+            try:
+                paths = [Path(recordings[q]) for q in srcs]
+                joined = paths[0] if len(paths) == 1 else speedup.join_clips(
+                    paths, work / "joined" / f"after_{b.id}.mp4", log=r.log)
+                info = media.probe(joined)
+                if info.duration > 4.0:
+                    return joined, info, 0.0, min(info.duration, max(seconds, 4.0))
+            except (media.MediaError, OSError) as exc:
+                r.log(f"Couldn't join the clips after {b.id} ({exc})")
+        if span is None:
+            return None
+        return Path(recordings[b.source]), infos[b.source], span[0], span[1]
+
     # Montages: building/mining cut to the beat of a song. Falls back to a fast-forward when
     # the stretch hasn't enough clear game sounds, there's no music, or numpy is missing.
     fast_items = list(plan.fast)
@@ -361,16 +469,16 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             b = by_id.get(item.get("id"))
             if b is None:
                 continue
-            span = speedup.source_span(b, next_block.get(b.id), float(item["seconds"]), ed,
-                                       plan.extend.get(b.id, 0.0), durations[b.source], voices.get(b.source))
-            if span is None:
+            got = stretch(b, float(item["seconds"]))
+            if got is None:
                 continue
+            rec_path, info, s0, s1 = got
+            span = (s0, s1)
             r.check()
             res = None
             song = montage_mod.pick_song(offered, history, seed=len(blocks) + n, used=montage_songs)
             if song is not None:
                 try:
-                    rec_path, info = recordings[b.source], infos[b.source]
                     sig = signals_mod.measure(Path(rec_path), info, cfg["whisper"].get("mic_track", "auto"),
                                               work, log=r.log)
                     r.log(f"Cutting {span[1] - span[0]:.0f}s after {b.id} into a montage to {song.name}")
@@ -402,14 +510,15 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         b = by_id.get(item.get("id"))
         if b is None:
             continue
-        span = speedup.source_span(b, next_block.get(b.id), float(item["seconds"]), ed,
-                                   plan.extend.get(b.id, 0.0), durations[b.source], voices.get(b.source))
-        if span is None:
+        got = stretch(b, float(item["seconds"]))
+        if got is None:
             continue
+        src_path, _, s0, s1 = got
+        span = (s0, s1)
         r.check()
         try:
             r.log(f"Speeding up {span[1] - span[0]:.0f}s after {b.id} ({item['speed']:g}x)")
-            path, frames = speedup.render(recordings[b.source], span[0], span[1], float(item["speed"]),
+            path, frames = speedup.render(src_path, span[0], span[1], float(item["speed"]),
                                           work / "fast" / f"fast_{b.id}.mp4", fps, width, height,
                                           badge=bool(ed.get("speedup_badge", True)), log=r.log)
         except media.MediaError as exc:
@@ -675,12 +784,21 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             return by_name.get(n) or next((t for t in library if n in t.name.lower() or t.title.lower() in n), None)
 
         raw = []
+        firm: set[float] = set()
         for c in md.music:
-            rec = anchor(c.get("at", ""))
+            at = c.get("at", "")
+            b_at = by_id.get(at)
+            # A song picked for a build cue (or for the line a timelapse/montage follows)
+            # starts where the work starts: the end of that line.
+            work_starts = b_at is not None and ("build_cue" in b_at.flags or at in insert_clips)
+            rec = anchor(at, at_end=work_starts)
             if rec is None:
                 continue
             tracks = [t for t in (find(c.get("track", "")), find(c.get("backup", ""))) if t]
-            raw.append((max(tl.seconds(rec), music_start), tracks, c.get("why", "")))
+            t0 = max(tl.seconds(rec), music_start)
+            if work_starts:
+                firm.add(t0)
+            raw.append((t0, tracks, c.get("why", "")))
         if not raw:   # no AI picks: one fresh track per chapter
             cue_starts = sorted({max(t, music_start) for t, _ in chapter_times} | {music_start})
             rng_tracks = sorted(offered or library, key=lambda t: history.get(t.path, 0))
@@ -688,7 +806,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         raw.sort(key=lambda x: x[0])
         # Talking on the finished timeline (also used for ducking below).
         speech = [(tl.seconds(starts[b]), tl.seconds(ends[b])) for b in starts] + vo_spans
-        raw = music.tidy_cues(music.from_the_start(raw, music_start), speech, music_start, total)
+        raw = music.tidy_cues(music.from_the_start(raw, music_start), speech, music_start, total, firm=firm)
         if scary:
             # Scary/heavy music only where the story outline says it's dangerous.
             outline = story.cached(out / "story.json", blocks)

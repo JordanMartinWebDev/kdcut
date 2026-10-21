@@ -82,3 +82,37 @@ def render(src: Path, start: float, end: float, speed: float, dest: Path, fps: F
         raise media.MediaError((proc.stderr.strip().splitlines() or ["ffmpeg failed"])[0][:300])
     media._PROBE_CACHE.pop(dest, None)
     return dest, frames
+
+
+def silent_clips(blocks: list[Block], n_recordings: int) -> dict[str, list[int]]:
+    """Recordings with no talking at all, by the block they follow: the last line said before
+    them. These clips were recorded on purpose ("start a montage of mining diamonds", then a
+    few silent clips of mining), so they belong to that line's quiet stretch."""
+    with_talk = sorted({b.source for b in blocks})
+    last_block = {}
+    for b in blocks:
+        last_block[b.source] = b.id
+    out: dict[str, list[int]] = {}
+    for a, z in zip(with_talk, with_talk[1:] + [n_recordings]):
+        gap = list(range(a + 1, z))
+        if gap:
+            out[last_block[a]] = gap
+    return out
+
+
+def join_clips(paths: list[Path], dest: Path, log=print) -> Path:
+    """The silent clips as one file (stream copy: no re-encode, so it's quick). Recordings
+    from the same OBS setup share their format, which is what joining without re-encoding
+    needs."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    key = "|".join(f"{p}:{p.stat().st_size}" for p in paths)
+    stamp = dest.with_suffix(".key")
+    if dest.is_file() and stamp.is_file() and stamp.read_text(encoding="utf-8") == key:
+        return dest
+    lst = dest.with_suffix(".txt")
+    lst.write_text("".join("file '" + str(p.resolve()).replace("'", "'\\''") + "'\n" for p in paths),
+                   encoding="utf-8")
+    media._run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(lst),
+                "-map", "0", "-c", "copy", str(dest)])
+    stamp.write_text(key, encoding="utf-8")
+    return dest

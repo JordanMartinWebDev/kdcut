@@ -149,7 +149,12 @@ def kept_ranges(blocks: list[Block], plan: Plan, durations: list[float], edit: d
                 real_start = max(onset(p_start), prev_end if k == 0 else pieces[k - 1][1])
                 real_end = min(speech_end(p_end), max(p_end, following - 0.05))
                 s = max(real_start - pad_b, prev_end if k == 0 else pieces[k - 1][1], 0.0)
-                e = real_end + pad_a + (plan.extend.get(b.id, 0.0) if last else 0.0)
+                ext = plan.extend.get(b.id, 0.0) if last else 0.0
+                if ext and nxt is not None and not is_dropped(nxt) and nxt.start - p_end < ext + 1.0:
+                    # He talks again before the extend would end: that's just a pause, not
+                    # something to show. Treat it like any other pause (cut it).
+                    ext = 0.0
+                e = real_end + pad_a + ext
                 if not last:
                     e = min(e, max(pieces[k + 1][0], real_end))
                 elif nxt is not None and is_dropped(nxt):

@@ -34,7 +34,7 @@ class Plan:
         return cls(**{k: v for k, v in data.items() if k in known})
 
 
-RULES_VERSION = 7     # bump when the editing rules change, so saved plans are redone
+RULES_VERSION = 9     # bump when the editing rules change, so saved plans are redone
 
 
 def blocks_key(blocks: list[Block]) -> str:
@@ -100,6 +100,21 @@ def protect_sentences(plan: Plan, blocks: list[Block], joined: float = 1.2) -> l
                     plan.drop.pop(b.id, None)
                     restored.append(b.id)
             i = j + 1
+    # A sentence carried across clips ("And as for bookshelves." / "They are also" / "a check."):
+    # keep every part if any part stays.
+    changed = True
+    while changed:
+        changed = False
+        for a, b in zip(blocks, blocks[1:]):
+            if a.source == b.source or not continues_across(a, b):
+                continue
+            if any("forced_drop" in x.flags or x.cue for x in (a, b)):
+                continue
+            if dropped(a) != dropped(b):
+                gone = a if dropped(a) else b
+                plan.drop.pop(gone.id, None)
+                restored.append(gone.id)
+                changed = True
     if restored:
         plan.notes.append(f"Kept {len(restored)} block(s) the AI wanted to cut, because cutting "
                           "them would have split a sentence: " + ", ".join(restored))
@@ -275,6 +290,27 @@ def system_prompt(cfg: dict, video: dict) -> str:
         "nowhere and don't change the story: e.g. 'let me check this shore for iron' -> finds "
         "nothing -> 'ok, heading across'. Cut the whole detour, from the line that starts it to "
         "the line that gives up, as long as nothing later refers back to it.",
+        "- The creator records short clips on purpose and narrates them for the edit. Every clip "
+        "was recorded because something in it matters; recording headers say how long each clip "
+        "is. Respect his hard clues: checklists ('gear check, nether check'), a sentence spread "
+        "over several clips ('And as for bookshelves.' / 'They are also' / 'a check.') where the "
+        "footage in between shows the thing, 'let's go' at the end of a plan, 'there's footage on "
+        "screen now'. A short line at a clip boundary is usually part of such a sentence, not a "
+        "stray fragment: never cut part of one. Lines marked '↪' continue in the next clip.",
+        "- [BUILD CUE] lines ('let's build this thing', 'cue the music', 'start a montage of "
+        "mining diamonds', 'let's queue a time lapse') say the work starts now. The quiet "
+        "stretch after one, and any NO TALKING clips right after it, is that work: show it with "
+        "a montage (hands-on building/mining with block sounds) or fast (travel, slow progress), "
+        "never cut it. Clips with NO TALKING were recorded on purpose for exactly this.",
+        "- Every build needs its payoff: keep the line that says it's done, the test ('let's "
+        "see if this works') and the result (the loot, 'it works'). Keep a few seconds of the "
+        "finished build with an extend on the 'it's done' line.",
+        "- [TIME SKIP] lines ('it's nighttime', 'okay, it's been two minutes') skip a wait: the "
+        "wait before them is cut with a hard cut. No fast, montage or extend on it.",
+        "- Running gags and callbacks ('as is tradition, let's check the wheat farm') are a "
+        "thread through the episode: keep every time it comes back.",
+        "- Read the [on screen] notes before cutting a short line: 'Well, that's one way to get "
+        "back' over a death screen is the story (he died), not a fragment.",
         "- Also cut clear waste: mic checks, 'is this recording', false starts and repeated takes "
         "(keep the best one, usually the last), the same point said twice in a row, stray "
         "one-word fragments that lead nowhere, and talk after the goodbye.",
@@ -322,6 +358,9 @@ def system_prompt(cfg: dict, video: dict) -> str:
         "farming), use fast instead of cutting: the viewer sees it happen in a few seconds "
         "(speed 3-8, ending up 3-15 s on screen). Cut stretches that are mostly menus, AFK or "
         "nothing at all. Never use fast for a stretch with talking in it.",
+        "- An extend is for showing something (a fight, a reveal, the thing he just named, like "
+        "the bookshelf he's checking off). Never extend just to hold a view while he pauses "
+        "before talking again: dead air is always cut.",
         "- Montage: for the one or two best hands-on stretches (building, mining, clearing land, "
         "with hits and action, few menus, at least ~40s long), use montage instead of fast: the "
         "stretch is cut to the beat of a song with the block sounds on the beat. Travel and walking "
@@ -355,9 +394,24 @@ def system_prompt(cfg: dict, video: dict) -> str:
     return "\n".join(lines)
 
 
+def continues_across(a: Block, b: Block) -> bool:
+    """Does the last line of one clip carry on in the first line of the next? ('They are
+    also' / 'a check.', 'And as for bookshelves.' / 'They are also')"""
+    from kdcut.blocks import ends_sentence
+    words_a = a.text.strip().split()
+    if not words_a:
+        return False
+    if not ends_sentence(a.text):
+        return True
+    # Whisper puts a full stop on every clip's last line. A short line without a verb that
+    # sets up a topic ("And as for bookshelves.") is still unfinished.
+    return len(words_a) <= 5 and words_a[0].lower().strip(",") in {"and", "as", "so", "but", "then", "plus"} \
+        and b.duration < 6
+
+
 def format_blocks(blocks: list[Block], recordings: list[Path], context: list[Block] = (),
                   notes: dict[str, list[str]] | None = None, measured: dict[str, str] | None = None,
-                  beats: dict[str, dict] | None = None) -> str:
+                  beats: dict[str, dict] | None = None, durations: list[float] | None = None) -> str:
     out = []
     if context:
         out.append("(Earlier blocks, for context only. Do not edit these.)")
@@ -368,7 +422,13 @@ def format_blocks(blocks: list[Block], recordings: list[Path], context: list[Blo
     last_src, last_beat = None, None
     for k, b in enumerate(blocks):
         if b.source != last_src:
-            out.append(f"--- Recording {b.source + 1}: {recordings[b.source].name} ---")
+            if last_src is not None:
+                # Clips with no talking at all between the last one and this one.
+                for q in range(last_src + 1, b.source):
+                    length = f", {durations[q]:.0f}s" if durations and q < len(durations) else ""
+                    out.append(f"--- Recording {q + 1}: {recordings[q].name}{length} clip, NO TALKING ---")
+            length = (f", {durations[b.source]:.0f}s clip" if durations and b.source < len(durations) else "")
+            out.append(f"--- Recording {b.source + 1}: {recordings[b.source].name}{length} ---")
             last_src = b.source
         beat = (beats or {}).get(b.id)
         if beat is not None and beat is not last_beat:
@@ -381,13 +441,19 @@ def format_blocks(blocks: list[Block], recordings: list[Path], context: list[Blo
             tags.append("[HIGHLIGHT]")
         if "chapter" in b.flags:
             tags.append("[CHAPTER]")
+        if "build_cue" in b.flags:
+            tags.append("[BUILD CUE]")
+        if "time_skip" in b.flags:
+            tags.append("[TIME SKIP]")
         tag_str = " " + " ".join(tags) if tags else ""
         if (measured or {}).get(b.id):
             tag_str += " " + measured[b.id]
         nxt = blocks[k + 1] if k + 1 < len(blocks) else None
         runs_on = (nxt is not None and nxt.source == b.source and not ends_sentence(b.text)
                    and nxt.start - b.end < 1.2)
-        out.append(f"{b.id} [{fmt_ts(b.start)} {b.duration:.0f}s]{tag_str} {b.text}" + (" →" if runs_on else ""))
+        across = (nxt is not None and nxt.source != b.source and continues_across(b, nxt))
+        out.append(f"{b.id} [{fmt_ts(b.start)} {b.duration:.0f}s]{tag_str} {b.text}"
+                   + (" →" if runs_on else "") + (" ↪" if across else ""))
         for note in (notes or {}).get(b.id, []):
             out.append(f"      {note}")
     return "\n".join(out)
@@ -454,7 +520,8 @@ def make_plan(blocks: list[Block], recordings: list[Path], cfg: dict, video: dic
               broll: list[tuple], vocab: dict[str, list[str]],
               caller: ToolCaller = llm.call_tool, log=print,
               notes: dict[str, list[str]] | None = None, measured: dict[str, str] | None = None,
-              outline=None, quiet_seconds: dict[str, float] | None = None) -> Plan:
+              outline=None, quiet_seconds: dict[str, float] | None = None,
+              durations: list[float] | None = None) -> Plan:
     window = max(int(cfg["llm"].get("window_blocks", 600)), 50)
     valid = {b.id for b in blocks}
     by_id = {b.id: b for b in blocks}
@@ -478,7 +545,7 @@ def make_plan(blocks: list[Block], recordings: list[Path], cfg: dict, video: dic
         remaining_broll = list(broll)
         result = caller(
             cfg, sys_prompt,
-            user_prompt(format_blocks(chunk, recordings, context, notes, measured, beats), remaining_broll,
+            user_prompt(format_blocks(chunk, recordings, context, notes, measured, beats, durations), remaining_broll,
                         vocab, outline_text),
             "submit_edit", "Submit the edit decision list for these transcript blocks.",
             SCHEMA if cfg["edit"].get("overlays", False) else

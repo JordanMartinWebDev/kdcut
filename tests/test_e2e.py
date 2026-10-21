@@ -81,7 +81,7 @@ class FakeAI:
             "thumbnail_moments": ["B0006"],
             "cold_open": {"id": "B0006", "start_words": "oh my gosh diamonds", "end_words": "gosh diamonds",
                           "lead_in": 0, "reason": "diamonds reaction"},
-            "music": [{"at": "B0002", "track": "Calm Fields - Sleepy Fish", "why": "building"},
+            "music": [{"at": "B0002", "track": "Bright Fields - Happy Fish", "why": "building"},
                       {"at": "B0008", "track": "", "why": "silence for the ending"}],
         }
 
@@ -145,9 +145,9 @@ class EndToEnd(unittest.TestCase):
         chars.mkdir()
         from PIL import Image
         Image.new("RGBA", (300, 600), (240, 200, 40, 255)).save(chars / "shocked.png")
-        mdir = cls.tmp / "music" / "Calm"
+        mdir = cls.tmp / "music" / "Happy"
         mdir.mkdir(parents=True)
-        ff("-f", "lavfi", "-i", "sine=frequency=330:duration=25", str(mdir / "ES_Calm Fields - Sleepy Fish.mp3"))
+        ff("-f", "lavfi", "-i", "sine=frequency=330:duration=25", str(mdir / "ES_Bright Fields - Happy Fish.mp3"))
         ff("-f", "lavfi", "-i", "sine=frequency=550:duration=30", str(mdir / "ES_Lazy Sunday - Ava Low.mp3"))
         ff("-f", "lavfi", "-i", "sine=frequency=990:duration=2", str(mdir / "ES_Sting.mp3"))   # too short
         import kdcut.music as music_mod
@@ -298,7 +298,7 @@ class EndToEnd(unittest.TestCase):
         plan_prompt = next(c[1] for c in self.ai.calls if c[0] == "submit_edit")
         self.assertIn("[on screen", plan_prompt)
         self.assertIn("fighting a zombie", plan_prompt)
-        self.assertTrue(list((self.proj / "output" / ".work" / "frames").glob("F*.jpg")))
+        self.assertTrue(list((self.proj / "output" / ".work" / "frames").glob("r*.jpg")))
 
     def test_thumbnails_made_with_series_theme(self):
         thumbs = self.result["thumbnails"]
@@ -370,9 +370,9 @@ class EndToEnd(unittest.TestCase):
         self.assertGreater(media.probe(bed).duration, 5)
         lufs, _ = audioprep.measure(bed)
         self.assertTrue(-38 < lufs < -20, lufs)          # audible under a -16 LUFS voice
-        self.assertIn("Music  Calm Fields - Sleepy Fish", self.review)
+        self.assertIn("Music  Bright Fields - Happy Fish", self.review)
         prompt = next(c[1] for c in self.ai.calls if c[0] == "submit_metadata")
-        self.assertIn("Lazy Sunday - Ava Low [Calm]", prompt)
+        self.assertIn("Lazy Sunday - Ava Low [Happy]", prompt)
         self.assertNotIn("Sting", prompt)
         self.assertGreaterEqual(self.result["placed"]["music"], 1)
 

@@ -175,6 +175,48 @@ def plan_looks(blocks: list[Block], gaps: list[Gap], max_frames: int) -> list[Lo
     return looks
 
 
+def clip_looks(blocks: list[Block], durations: list[float], have: list[Look]) -> list[Look]:
+    """One look at every recording that has none yet. Clips are recorded on purpose, and a
+    short one can hold the moment the story turns on (a death screen, a discovery) with only a
+    line of talk."""
+    seen = {lk.source for lk in have}
+    by_src: dict[int, list[Block]] = {}
+    for b in blocks:
+        by_src.setdefault(b.source, []).append(b)
+    order = [b.id for b in blocks]
+    out = []
+    for src, dur in enumerate(durations):
+        if src in seen or dur <= 0:
+            continue
+        bl = by_src.get(src, [])
+        edges = [(None, 0.0)] + [(b.id, b.end) for b in bl]
+        starts = [b.start for b in bl] + [dur]
+        stretches = [(after, a, z) for (after, a), z in zip(edges, starts)]
+        picks = []
+        opening = stretches[0]
+        if opening[2] - opening[1] >= 1.5 or not bl:
+            picks.append(opening)          # what made him hit record
+        rest = sorted(stretches[1:], key=lambda e: e[2] - e[1], reverse=True)
+        if rest and rest[0][2] - rest[0][1] >= 3.0:
+            picks.append(rest[0])
+        if not picks:
+            picks.append(max(stretches, key=lambda e: e[2] - e[1]))
+        for after, a, z in picks:
+            t = a + min(1.5, max(z - a, 0.0) / 2)
+            if after is None:
+                # Start of the clip: the note goes before its first line (after the previous one).
+                first = bl[0].id if bl else None
+                i = order.index(first) if first else -1
+                after = order[i - 1] if i > 0 else first
+                if after is None:
+                    prev = [b for b in blocks if b.source < src]
+                    after = prev[-1].id if prev else None
+            if after is None:
+                continue
+            out.append(Look(src, round(t, 2), after, round(z - a, 1), "start of a clip" if a == 0.0 else "no talking"))
+    return out
+
+
 # --------------------------------------------------------------------------------------
 # Asking Claude what's on screen
 # --------------------------------------------------------------------------------------
@@ -202,14 +244,17 @@ SYSTEM = ("You are helping edit a Minecraft let's-play. You see still frames fro
 def describe(looks: list[Look], recordings: list[Path], cfg: dict, frames_dir: Path,
              caller=llm.call_tool, log=print, check=lambda: None, batch: int = 16) -> None:
     frames_dir.mkdir(parents=True, exist_ok=True)
+
+    def img_of(lk: Look) -> Path:
+        return frames_dir / f"r{lk.source}_{lk.time:.2f}.jpg"
     for lk in looks:
-        img = frames_dir / f"{lk.id}.jpg"
+        img = img_of(lk)
         if not img.exists():
             try:
                 media.extract_frame(recordings[lk.source], lk.time, img, width=512)
             except media.MediaError:
                 continue
-    todo = [lk for lk in looks if (frames_dir / f"{lk.id}.jpg").exists()]
+    todo = [lk for lk in looks if img_of(lk).exists()]
     for i in range(0, len(todo), batch):
         check()
         chunk = todo[i:i + batch]
@@ -218,7 +263,7 @@ def describe(looks: list[Look], recordings: list[Path], cfg: dict, frames_dir: P
         for lk in chunk:
             label = f"{lk.id}: recording {lk.source + 1} at {fmt_ts(lk.time)} ({lk.why})"
             content.append({"type": "text", "text": label})
-            content.append(llm.image_block(frames_dir / f"{lk.id}.jpg", max_side=512))
+            content.append(llm.image_block(img_of(lk), max_side=512))
         content.append({"type": "text", "text": "Describe every frame by calling the tool."})
         res = caller(cfg, SYSTEM, content, "describe_frames", "Describe the frames.", SCHEMA)
         by_id = {f.get("id"): f for f in res.get("frames", [])}
@@ -237,7 +282,7 @@ def screen_notes(looks: list[Look]) -> dict[str, list[str]]:
             continue
         where = f"{lk.gap:.0f}s without talking" if lk.gap else "flagged moment"
         notes.setdefault(lk.after_block, []).append(
-            f"[on screen, {where}] {fmt_ts(lk.time)} {lk.desc} (action {lk.action})")
+            f"[on screen, rec {lk.source + 1} {fmt_ts(lk.time)}, {where}] {lk.desc} (action {lk.action})")
     return notes
 
 
@@ -249,13 +294,16 @@ def analyse(recordings: list[Path], infos: list[media.MediaInfo], blocks: list[B
     vc = cfg.get("vision", {})
     cache = work / "vision.json"
     key = {"recs": [[str(r), r.stat().st_size] for r in recordings],
-           "blocks": len(blocks), "max": vc.get("max_frames", 120), "gap": vc.get("min_gap", 8)}
+           "blocks": len(blocks), "max": vc.get("max_frames", 120), "gap": vc.get("min_gap", 8), "v": 2}
+    old_desc: dict[tuple[int, float], tuple[str, int]] = {}
     if cache.is_file():
         try:
             data = json.loads(cache.read_text(encoding="utf-8"))
             if data.get("key") == key:
                 log("Using earlier footage notes")
                 return screen_notes([Look(**lk) for lk in data["looks"]])
+            old_desc = {(lk["source"], round(lk["time"], 2)): (lk["desc"], lk["action"])
+                        for lk in data.get("looks", []) if lk.get("desc")}
         except (OSError, json.JSONDecodeError, TypeError):
             pass
 
@@ -273,9 +321,19 @@ def analyse(recordings: list[Path], infos: list[media.MediaInfo], blocks: list[B
             g.loud = [t for t in loud if g.start <= t <= g.end]
             g.scenes = [t for t in scenes if g.start <= t <= g.end]
     looks = plan_looks(blocks, gaps, int(vc.get("max_frames", 120)))
+    looks += clip_looks(blocks, [i.duration for i in infos], looks)
+    looks.sort(key=lambda lk: (lk.source, lk.time))
+    for lk in looks:              # a stretch at the start of a clip: note it before the clip's first line
+        if lk.after_block is None:
+            prev = [b for b in blocks if b.source < lk.source]
+            lk.after_block = prev[-1].id if prev else next((b.id for b in blocks if b.source == lk.source), None)
+    for i, lk in enumerate(looks, 1):
+        lk.id = f"F{i:03d}"
     if not looks:
         return {}
-    describe(looks, recordings, cfg, work / "frames", caller=caller, log=log, check=check)
+    for lk in looks:              # already described on an earlier run
+        lk.desc, lk.action = old_desc.get((lk.source, round(lk.time, 2)), ("", -1))
+    describe([lk for lk in looks if not lk.desc], recordings, cfg, work / "frames", caller=caller, log=log, check=check)
     cache.write_text(json.dumps({"key": key, "looks": [asdict(lk) for lk in looks]}, indent=1),
                      encoding="utf-8")
     return screen_notes(looks)
