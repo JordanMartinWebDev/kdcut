@@ -436,14 +436,20 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         span = speedup.source_span(b, next_block.get(b.id), seconds, ed, plan.extend.get(b.id, 0.0),
                                    durations[b.source], voices.get(b.source))
         srcs = silent.get(b.id)
-        if srcs and (span is None or span[1] - span[0] < 10.0):
+        if srcs:
+            # The quiet end of this clip, then the clips with no talking, as one stretch. A short
+            # clip is joined whole (so its timing stays exact); a long one only contributes the
+            # clips after it.
+            own = span is not None and durations[b.source] <= 300.0
             try:
-                paths = [Path(recordings[q]) for q in srcs]
+                paths = ([Path(recordings[b.source])] if own else []) + [Path(recordings[q]) for q in srcs]
                 joined = paths[0] if len(paths) == 1 else speedup.join_clips(
                     paths, work / "joined" / f"after_{b.id}.mp4", log=r.log)
                 info = media.probe(joined)
-                if info.duration > 4.0:
-                    return joined, info, 0.0, min(info.duration, max(seconds, 4.0))
+                s0 = span[0] if own else 0.0
+                s1 = min(info.duration, s0 + max(seconds, 4.0))
+                if s1 - s0 > 4.0:
+                    return joined, info, s0, s1
             except (media.MediaError, OSError) as exc:
                 r.log(f"Couldn't join the clips after {b.id} ({exc})")
         if span is None:
