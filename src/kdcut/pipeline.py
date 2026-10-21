@@ -19,7 +19,7 @@ import tomllib
 from pathlib import Path
 
 from kdcut import blocks as blocks_mod
-from kdcut import audioprep, broll as broll_mod, captions, continuity, graphics, vad, ducking, fcpxml, media, metadata, music, planner, transcribe, vision
+from kdcut import audioprep, broll as broll_mod, captions, clues, continuity, graphics, vad, ducking, fcpxml, media, metadata, music, planner, transcribe, vision
 from kdcut import montage as montage_mod, signals as signals_mod, speedup, story
 from kdcut import timelapse as timelapse_mod
 from kdcut.assets import AssetIndex
@@ -139,6 +139,10 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
                                      max_seconds=float(ed["max_block_seconds"]))
     cues = [b for b in blocks if b.cue]
     r.log(f"{len(blocks)} speech blocks, {len(cues)} spoken cue(s)")
+    n_build, n_skip = clues.mark(blocks)
+    if n_build or n_skip:
+        r.log(f"Heard {n_build} build cue(s) and {n_skip} time skip(s)")
+    silent = speedup.silent_clips(blocks, len(recordings))       # block id -> clips with no talking after it
     (out / "transcript.txt").write_text(
         planner.format_blocks(blocks, recordings, durations=[i.duration for i in infos]), encoding="utf-8")
 
@@ -214,6 +218,15 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
                 sigs[src] = signals_mod.measure(Path(rec_path), info, cfg["whisper"].get("mic_track", "auto"),
                                                 work, log=r.log)
             measured = signals_mod.describe(blocks, sigs, voices, durations)
+            for bid, srcs in silent.items():
+                # Clips with no talking after this line are part of its quiet stretch.
+                extra = sum(durations[q] for q in srcs)
+                measured.quiet_seconds[bid] = measured.quiet_seconds.get(bid, 0.0) + extra
+                if bid in measured.quiet:
+                    measured.quiet[bid] = (measured.quiet[bid].rstrip("]")
+                                           + f" · plus {len(srcs)} clip(s) with no talking, {extra:.0f}s]")
+                else:
+                    measured.quiet[bid] = f"[quiet after: {len(srcs)} clip(s) with no talking, {extra:.0f}s]"
         except Cancelled:
             raise
         except Exception as exc:     # the numbers help; the edit works without them
@@ -252,6 +265,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     # (Applied on every run, so saved plans benefit too.)
     planner.protect_sentences(plan, blocks)         # incl. sentences carried across clips
     glued = planner.protect_joins(plan, blocks, voices)
+    plan.notes += clues.enforce(plan, blocks)       # waits he skips ("it's nighttime") are cut
     if glued:
         r.log(f"Kept {len(glued)} short bit(s) that couldn't be cut cleanly")
 
@@ -416,6 +430,26 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     for a, b in zip(blocks, blocks[1:]):
         if a.source == b.source:
             next_block[a.id] = b
+    def stretch(b, seconds: float):
+        """(recording, info, start, end) of the quiet stretch after a block. When clips with no
+        talking follow it, that's where the work is: they're joined into one file."""
+        span = speedup.source_span(b, next_block.get(b.id), seconds, ed, plan.extend.get(b.id, 0.0),
+                                   durations[b.source], voices.get(b.source))
+        srcs = silent.get(b.id)
+        if srcs and (span is None or span[1] - span[0] < 10.0):
+            try:
+                paths = [Path(recordings[q]) for q in srcs]
+                joined = paths[0] if len(paths) == 1 else speedup.join_clips(
+                    paths, work / "joined" / f"after_{b.id}.mp4", log=r.log)
+                info = media.probe(joined)
+                if info.duration > 4.0:
+                    return joined, info, 0.0, min(info.duration, max(seconds, 4.0))
+            except (media.MediaError, OSError) as exc:
+                r.log(f"Couldn't join the clips after {b.id} ({exc})")
+        if span is None:
+            return None
+        return Path(recordings[b.source]), infos[b.source], span[0], span[1]
+
     # Montages: building/mining cut to the beat of a song. Falls back to a fast-forward when
     # the stretch hasn't enough clear game sounds, there's no music, or numpy is missing.
     fast_items = list(plan.fast)
@@ -435,16 +469,16 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             b = by_id.get(item.get("id"))
             if b is None:
                 continue
-            span = speedup.source_span(b, next_block.get(b.id), float(item["seconds"]), ed,
-                                       plan.extend.get(b.id, 0.0), durations[b.source], voices.get(b.source))
-            if span is None:
+            got = stretch(b, float(item["seconds"]))
+            if got is None:
                 continue
+            rec_path, info, s0, s1 = got
+            span = (s0, s1)
             r.check()
             res = None
             song = montage_mod.pick_song(offered, history, seed=len(blocks) + n, used=montage_songs)
             if song is not None:
                 try:
-                    rec_path, info = recordings[b.source], infos[b.source]
                     sig = signals_mod.measure(Path(rec_path), info, cfg["whisper"].get("mic_track", "auto"),
                                               work, log=r.log)
                     r.log(f"Cutting {span[1] - span[0]:.0f}s after {b.id} into a montage to {song.name}")
@@ -476,14 +510,15 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         b = by_id.get(item.get("id"))
         if b is None:
             continue
-        span = speedup.source_span(b, next_block.get(b.id), float(item["seconds"]), ed,
-                                   plan.extend.get(b.id, 0.0), durations[b.source], voices.get(b.source))
-        if span is None:
+        got = stretch(b, float(item["seconds"]))
+        if got is None:
             continue
+        src_path, _, s0, s1 = got
+        span = (s0, s1)
         r.check()
         try:
             r.log(f"Speeding up {span[1] - span[0]:.0f}s after {b.id} ({item['speed']:g}x)")
-            path, frames = speedup.render(recordings[b.source], span[0], span[1], float(item["speed"]),
+            path, frames = speedup.render(src_path, span[0], span[1], float(item["speed"]),
                                           work / "fast" / f"fast_{b.id}.mp4", fps, width, height,
                                           badge=bool(ed.get("speedup_badge", True)), log=r.log)
         except media.MediaError as exc:
@@ -749,12 +784,21 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             return by_name.get(n) or next((t for t in library if n in t.name.lower() or t.title.lower() in n), None)
 
         raw = []
+        firm: set[float] = set()
         for c in md.music:
-            rec = anchor(c.get("at", ""))
+            at = c.get("at", "")
+            b_at = by_id.get(at)
+            # A song picked for a build cue (or for the line a timelapse/montage follows)
+            # starts where the work starts: the end of that line.
+            work_starts = b_at is not None and ("build_cue" in b_at.flags or at in insert_clips)
+            rec = anchor(at, at_end=work_starts)
             if rec is None:
                 continue
             tracks = [t for t in (find(c.get("track", "")), find(c.get("backup", ""))) if t]
-            raw.append((max(tl.seconds(rec), music_start), tracks, c.get("why", "")))
+            t0 = max(tl.seconds(rec), music_start)
+            if work_starts:
+                firm.add(t0)
+            raw.append((t0, tracks, c.get("why", "")))
         if not raw:   # no AI picks: one fresh track per chapter
             cue_starts = sorted({max(t, music_start) for t, _ in chapter_times} | {music_start})
             rng_tracks = sorted(offered or library, key=lambda t: history.get(t.path, 0))
@@ -762,7 +806,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         raw.sort(key=lambda x: x[0])
         # Talking on the finished timeline (also used for ducking below).
         speech = [(tl.seconds(starts[b]), tl.seconds(ends[b])) for b in starts] + vo_spans
-        raw = music.tidy_cues(music.from_the_start(raw, music_start), speech, music_start, total)
+        raw = music.tidy_cues(music.from_the_start(raw, music_start), speech, music_start, total, firm=firm)
         if scary:
             # Scary/heavy music only where the story outline says it's dangerous.
             outline = story.cached(out / "story.json", blocks)

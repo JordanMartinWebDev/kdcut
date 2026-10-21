@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 from kdcut.blocks import Block, fmt_ts
 
-VERSION = 1
+VERSION = 2
 
 SCHEMA = {
     "type": "object",
@@ -61,7 +61,10 @@ SYSTEM = (
     "line about it was cut: restore it.\n"
     "- A timelapse plays before the talk that sets it up (the plan, the 'why'), or before the "
     "creator's cue to start ('let's go'): move it right after the last line that leads into it. "
-    "Builds announced together play together, in the order he announced them.\n"
+    "Builds announced together play together, in the order he announced them. Lines marked "
+    "[BUILD CUE] are his cue that the work starts: a timelapse for that build goes right after.\n"
+    "- A build is shown but its payoff is cut (the 'it's done' line, the test, the result): "
+    "restore it.\n"
     "Only restore what the story needs; leave cuts of real waste (retakes, rambling, dead ends) "
     "alone. Don't invent problems: if the edit flows, return empty lists."
 )
@@ -87,10 +90,11 @@ def script(blocks: list[Block], dropped: dict[str, str], durations: list[float],
         if "forced_drop" in b.flags:
             out.append(f"{b.id} CUT (creator said cut) {b.text[:60]}")
             continue
+        tag = (" [BUILD CUE]" if "build_cue" in b.flags else "") + (" [TIME SKIP]" if "time_skip" in b.flags else "")
         if b.id in dropped:
-            out.append(f"{b.id} CUT ({dropped[b.id] or 'editor'}) [{fmt_ts(b.start)}] {b.text}")
+            out.append(f"{b.id} CUT ({dropped[b.id] or 'editor'}) [{fmt_ts(b.start)}]{tag} {b.text}")
         else:
-            out.append(f"{b.id} [{fmt_ts(b.start)}] {b.text}")
+            out.append(f"{b.id} [{fmt_ts(b.start)}]{tag} {b.text}")
         out += [f"      {n}" for n in (notes or {}).get(b.id, [])]
         out += [f"      >> {x}" for x in (inserts or {}).get(b.id, [])]
     return "\n".join(out)

@@ -77,7 +77,7 @@ def youtube_chapters(chapters: list[tuple[float, str]], total: float) -> list[tu
     return out if len(out) >= 3 else []
 
 
-RULES_VERSION = 7     # bump when these rules change, so saved packaging is redone
+RULES_VERSION = 8     # bump when these rules change, so saved packaging is redone
 
 COLD_OPEN_RULES = (
     "Also pick a cold open: a 4-10 second teaser shown at the very start (in black and white with "
@@ -104,7 +104,8 @@ def generate(cfg: dict, video: dict, kept: list[Block], caller=llm.call_tool,
              music_library: str = "") -> Metadata:
     lines = []
     for b in kept:
-        lines.append(f"{b.id}{' [HIGHLIGHT]' if 'highlight' in b.flags else ''} {b.text}")
+        lines.append(f"{b.id}{' [HIGHLIGHT]' if 'highlight' in b.flags else ''}"
+                     f"{' [BUILD CUE]' if 'build_cue' in b.flags else ''} {b.text}")
         lines += [f"      {n}" for n in (notes or {}).get(b.id, [])]
     system = (
         f"You write YouTube packaging for {cfg['channel'].get('name', 'a Minecraft channel')}, a "

@@ -34,7 +34,7 @@ class Plan:
         return cls(**{k: v for k, v in data.items() if k in known})
 
 
-RULES_VERSION = 8     # bump when the editing rules change, so saved plans are redone
+RULES_VERSION = 9     # bump when the editing rules change, so saved plans are redone
 
 
 def blocks_key(blocks: list[Block]) -> str:
@@ -297,6 +297,18 @@ def system_prompt(cfg: dict, video: dict) -> str:
         "footage in between shows the thing, 'let's go' at the end of a plan, 'there's footage on "
         "screen now'. A short line at a clip boundary is usually part of such a sentence, not a "
         "stray fragment: never cut part of one. Lines marked '↪' continue in the next clip.",
+        "- [BUILD CUE] lines ('let's build this thing', 'cue the music', 'start a montage of "
+        "mining diamonds', 'let's queue a time lapse') say the work starts now. The quiet "
+        "stretch after one, and any NO TALKING clips right after it, is that work: show it with "
+        "a montage (hands-on building/mining with block sounds) or fast (travel, slow progress), "
+        "never cut it. Clips with NO TALKING were recorded on purpose for exactly this.",
+        "- Every build needs its payoff: keep the line that says it's done, the test ('let's "
+        "see if this works') and the result (the loot, 'it works'). Keep a few seconds of the "
+        "finished build with an extend on the 'it's done' line.",
+        "- [TIME SKIP] lines ('it's nighttime', 'okay, it's been two minutes') skip a wait: the "
+        "wait before them is cut with a hard cut. No fast, montage or extend on it.",
+        "- Running gags and callbacks ('as is tradition, let's check the wheat farm') are a "
+        "thread through the episode: keep every time it comes back.",
         "- Read the [on screen] notes before cutting a short line: 'Well, that's one way to get "
         "back' over a death screen is the story (he died), not a fragment.",
         "- Also cut clear waste: mic checks, 'is this recording', false starts and repeated takes "
@@ -410,6 +422,11 @@ def format_blocks(blocks: list[Block], recordings: list[Path], context: list[Blo
     last_src, last_beat = None, None
     for k, b in enumerate(blocks):
         if b.source != last_src:
+            if last_src is not None:
+                # Clips with no talking at all between the last one and this one.
+                for q in range(last_src + 1, b.source):
+                    length = f", {durations[q]:.0f}s" if durations and q < len(durations) else ""
+                    out.append(f"--- Recording {q + 1}: {recordings[q].name}{length} clip, NO TALKING ---")
             length = (f", {durations[b.source]:.0f}s clip" if durations and b.source < len(durations) else "")
             out.append(f"--- Recording {b.source + 1}: {recordings[b.source].name}{length} ---")
             last_src = b.source
@@ -424,6 +441,10 @@ def format_blocks(blocks: list[Block], recordings: list[Path], context: list[Blo
             tags.append("[HIGHLIGHT]")
         if "chapter" in b.flags:
             tags.append("[CHAPTER]")
+        if "build_cue" in b.flags:
+            tags.append("[BUILD CUE]")
+        if "time_skip" in b.flags:
+            tags.append("[TIME SKIP]")
         tag_str = " " + " ".join(tags) if tags else ""
         if (measured or {}).get(b.id):
             tag_str += " " + measured[b.id]

@@ -17,7 +17,7 @@ from pathlib import Path
 
 from kdcut.blocks import Block
 
-VERSION = 2
+VERSION = 3
 
 KINDS = ["intro", "goal", "setup", "attempt", "setback", "discovery", "danger", "payoff",
          "personal", "aside", "housekeeping", "outro"]
@@ -49,6 +49,15 @@ SCHEMA = {
             "items": {"type": "object", "properties": {
                 "id": {"type": "string"}, "why": {"type": "string"}}, "required": ["id", "why"]},
         },
+        "callbacks": {
+            "type": "array",
+            "description": "Running gags and recurring check-ins that come back through the episode "
+                           "('as is tradition, let's check the wheat farm'). Every block where it comes up.",
+            "items": {"type": "object", "properties": {
+                "name": {"type": "string"},
+                "ids": {"type": "array", "items": {"type": "string"}},
+            }, "required": ["name", "ids"]},
+        },
         "threads": {
             "type": "array",
             "description": "Setups that pay off later. Only real ones, where cutting the setup "
@@ -73,7 +82,9 @@ SYSTEM = (
     "checklists ('gear check, nether check'), a sentence spread over several clips ('And as for "
     "bookshelves.' / 'They are also' / 'a check.') with the footage in between showing it, 'let's "
     "go' at the end of a plan, 'there's footage on screen now'. Those are the spine: list them "
-    "in must_keep. [on screen] notes say what the footage shows when he isn't talking (a death "
+    "in must_keep, along with each build's payoff (the 'it's done' line, the test, the loot). "
+    "Running gags that come back (a check-in on the same farm every so often) go in callbacks. "
+    "[on screen] notes say what the footage shows when he isn't talking (a death "
     "screen, a discovery); a death that changes what happens next is a beat."
 )
 
@@ -85,6 +96,7 @@ class Outline:
     beats: list[dict] = field(default_factory=list)
     threads: list[dict] = field(default_factory=list)
     must_keep: list[dict] = field(default_factory=list)
+    callbacks: list[dict] = field(default_factory=list)
 
     def text(self) -> str:
         """The outline as the editor sees it in every window."""
@@ -97,6 +109,8 @@ class Outline:
         if self.must_keep:
             out.append("Must keep (the story breaks without these): "
                        + "; ".join(f"{m['id']} ({m.get('why', '')})" for m in self.must_keep))
+        for c in self.callbacks:
+            out.append(f"Running gag '{c['name']}' (keep every time): " + ", ".join(c["ids"]))
         if self.threads:
             out.append("Threads (keep the setup when the payoff is kept):")
             for t in self.threads:
@@ -195,8 +209,15 @@ def _read(res: dict, fix) -> Outline:
                             "payoff": [x for x in map(fix, t.get("payoff", []) or []) if x][:3]})
     must = [{"id": fix(m.get("id")), "why": str(m.get("why", ""))[:80]}
             for m in res.get("must_keep", []) or [] if isinstance(m, dict)]
+    calls = []
+    for c in res.get("callbacks", []) or []:
+        if isinstance(c, dict):
+            ids = [x for x in map(fix, c.get("ids", []) or []) if x]
+            if len(ids) >= 2:
+                calls.append({"name": str(c.get("name", ""))[:60], "ids": ids[:12]})
     return Outline(summary=str(res.get("summary", "")), goals=[str(g) for g in res.get("goals", []) or []][:6],
-                   beats=beats, threads=threads, must_keep=[m for m in must if m["id"]][:60])
+                   beats=beats, threads=threads, must_keep=[m for m in must if m["id"]][:60],
+                   callbacks=calls[:8])
 
 
 def cached(cache: Path, blocks: list[Block]) -> Outline | None:
@@ -213,10 +234,11 @@ def cached(cache: Path, blocks: list[Block]) -> Outline | None:
 def protect_threads(plan, outline: Outline, blocks: list[Block]) -> list[str]:
     """Undo cuts of a setup whose payoff stays in the video. Returns the restored ids."""
     restored = []
-    for m in outline.must_keep:
-        if m["id"] in plan.drop and m["id"] in {b.id for b in blocks}:
-            plan.drop.pop(m["id"])
-            restored.append(m["id"])
+    known = {b.id for b in blocks}
+    for bid in [m["id"] for m in outline.must_keep] + [i for c in outline.callbacks for i in c["ids"]]:
+        if bid in plan.drop and bid in known:
+            plan.drop.pop(bid)
+            restored.append(bid)
     for t in outline.threads:
         if all(p in plan.drop for p in t["payoff"]):
             continue                    # the payoff is gone too: the setup can go

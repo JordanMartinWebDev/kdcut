@@ -317,7 +317,8 @@ def from_the_start(raw: list[tuple], start: float, slack: float = 3.0) -> list[t
 
 
 def tidy_cues(raw: list[tuple], speech: list[tuple[float, float]], start: float, total: float,
-              min_section: float = MIN_SECTION, shift: float = SHIFT) -> list[tuple]:
+              min_section: float = MIN_SECTION, shift: float = SHIFT,
+              firm: set[float] = frozenset(), firm_gap: float = 30.0) -> list[tuple]:
     """Make the AI's music changes land well.
 
     - No section shorter than `min_section`: a change that comes too soon after the last one
@@ -350,11 +351,22 @@ def tidy_cues(raw: list[tuple], speech: list[tuple[float, float]], start: float,
     out: list[tuple] = []
     for t, tracks, why in raw:
         t = max(t, start)
+        is_firm = any(abs(t - f) < 0.5 for f in firm)
         if out:
-            t = in_pause(t)
-            # A deliberate silence (a scare, a reveal) is kept even when it comes soon.
-            if tracks and (t - out[-1][0] < min_section or total - t < min_section / 3):
-                continue
+            if is_firm:
+                # Where the work starts (a build cue, a timelapse): the song changes right there,
+                # even if the last change was recent. It's the moment the music is for.
+                if t - out[-1][0] < firm_gap:
+                    if out[-1][0] > start:
+                        out[-1] = (t, tracks, why)          # the build's song wins
+                        continue
+                    if t - out[-1][0] < 15.0:
+                        continue                            # right at the start: keep one song
+            else:
+                t = in_pause(t)
+                # A deliberate silence (a scare, a reveal) is kept even when it comes soon.
+                if tracks and (t - out[-1][0] < min_section or total - t < min_section / 3):
+                    continue
         out.append((t, tracks, why))
     return out
 
@@ -450,7 +462,10 @@ RULES = (
     "dangerous Nether, big fights and chases. Never use them anywhere else. Judge tracks by their "
     "mood, energy and genre; tracks marked [no mood tags] are unknown, so use them only when "
     "nothing tagged fits. "
-    "Change music when the mood changes, usually at chapter boundaries, and let each song play at "
+    "Music follows the story: start a new upbeat song where the work starts, at each line "
+    "marked [BUILD CUE] ('let's build this thing', 'cue the music') and where a timelapse plays, "
+    "and when a new build or goal begins. "
+    "Otherwise change music when the mood changes, usually at chapter boundaries, and let each song play at "
     "least a couple of minutes. The first cue must be at the first block, so music plays from the "
     "start; don't change it again in the first minute. Leave music "
     "out where silence is stronger (a scary moment, a big reveal, an emotional beat). Avoid "

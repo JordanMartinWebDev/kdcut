@@ -115,7 +115,9 @@ RULES = (
     "and why, at his cue to start ('let's go', 'let's get started', 'time to build'). Never "
     "before he's done explaining it: the viewer must hear the plan before seeing it built. "
     "If he lays out several builds together and then says 'let's go', their timelapses play "
-    "there back to back, in the order he announced them. A timelapse of something finished or "
+    "there back to back, in the order he announced them. Lines marked [BUILD CUE] ('let's build "
+    "this thing', 'cue the music', 'let's queue a time lapse') are his cue: the timelapse for "
+    "that build goes right after the cue. A timelapse of something finished or "
     "a reveal goes after the line that leads into showing it. Use the file names and "
     "voiceovers to tell what each timelapse shows. Never put one in the middle of a sentence "
     "or a story.\n"
@@ -125,7 +127,7 @@ RULES = (
 
 
 def cache_key(kept: list[Block], timelapses: list[Timelapse], loose: list[tuple[str, str]]) -> str:
-    sig = json.dumps(["v2", [b.id for b in kept], [(t.name, round(t.duration, 1), t.voiceover.name if t.voiceover else "")
+    sig = json.dumps(["v3", [b.id for b in kept], [(t.name, round(t.duration, 1), t.voiceover.name if t.voiceover else "")
                                             for t in timelapses], loose])
     return hashlib.sha1(sig.encode("utf-8")).hexdigest()[:16]
 
@@ -133,7 +135,7 @@ def cache_key(kept: list[Block], timelapses: list[Timelapse], loose: list[tuple[
 def place(cfg: dict, video: dict, kept: list[Block], timelapses: list[Timelapse],
           loose: list[tuple[str, str]], caller) -> list[dict]:
     """Ask the AI where each timelapse goes. `loose` is [(voiceover file name, transcript)]."""
-    lines = [f"{b.id} {b.text}" for b in kept]
+    lines = [f"{b.id}{' [BUILD CUE]' if 'build_cue' in b.flags else ''} {b.text}" for b in kept]
     tls = []
     for t in timelapses:
         line = f"- {t.name} ({t.duration:.0f}s)"
