@@ -16,6 +16,8 @@ RECORDING_EXTS = media.VIDEO_EXTS
 BROLL_EXTS = media.VIDEO_EXTS | media.IMAGE_EXTS
 TIMELAPSE_EXTS = media.VIDEO_EXTS | media.AUDIO_EXTS
 SCREENSHOT_EXTS = media.IMAGE_EXTS
+SHORT_VIDEO_EXTS = media.VIDEO_EXTS
+SHORT_AUDIO_EXTS = media.AUDIO_EXTS
 
 
 def natural_key(p: str | Path):
@@ -64,6 +66,18 @@ class Project:
     series: str = ""
     episode: str = ""
     screenshots: list[str] = field(default_factory=list)
+    # The vertical Short: build timelapse(s), glamor shots of the finished build, a voiceover.
+    short_timelapses: list[str] = field(default_factory=list)
+    short_glamor: list[str] = field(default_factory=list)
+    short_voiceover: list[str] = field(default_factory=list)
+    short_title: str = ""
+
+    def short_files(self):
+        from kdcut.shorts import ShortFiles
+        return ShortFiles(timelapses=[Path(p) for p in self.short_timelapses],
+                          glamor=[Path(p) for p in self.short_glamor],
+                          voiceover=Path(self.short_voiceover[0]) if self.short_voiceover else None,
+                          title=self.short_title.strip())
 
     def out_dir(self, projects_dir: Path) -> Path:
         return Path(projects_dir) / safe_name(self.name)
@@ -87,7 +101,10 @@ def validate(project: Project) -> list[str]:
         problems.append("Give the video a name (it becomes the folder and timeline name).")
     if not project.recordings:
         problems.append("Drag at least one recording into the Recordings box.")
-    missing = [r for r in project.recordings + project.broll + project.timelapses if not Path(r).exists()]
+    if project.short_voiceover and not (project.short_timelapses or project.short_glamor):
+        problems.append("The Short has a voiceover but no timelapse or glamor shots to show under it.")
+    missing = [r for r in project.recordings + project.broll + project.timelapses + project.short_timelapses
+               + project.short_glamor + project.short_voiceover if not Path(r).exists()]
     if missing:
         problems.append("These files can't be found anymore:\n" + "\n".join(missing[:5]))
     return problems
@@ -143,7 +160,16 @@ def summary_text(result: dict) -> str:
             + (f"Added {p['timelapse']} timelapse(s), " if p.get("timelapse") else "Added ")
             + (f"{p['fast']} fast-forward(s), " if p.get("fast") else "")
             + f"{p['broll']} B-roll clip(s), {p['overlay']} overlay(s), "
-            f"{p['sfx']} sound effect(s) and {p.get('music', 0)} music track(s).")
+            f"{p['sfx']} sound effect(s) and {p.get('music', 0)} music track(s)."
+            + short_text(result.get("short")))
+
+
+def short_text(short: dict | None) -> str:
+    if not short:
+        return ""
+    if short.get("error"):
+        return f"\nThe Short couldn't be made: {short['error']}"
+    return f"\nMade a {short['seconds']:.0f}-second Short with captions."
 
 
 RESOLVE_STEPS = (

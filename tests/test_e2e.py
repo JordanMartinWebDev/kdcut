@@ -99,6 +99,12 @@ class EndToEnd(unittest.TestCase):
         make_recording(proj / "recordings" / "2026-10-13 19-30-12.mkv", 25)
         ff("-f", "lavfi", "-i", "testsrc=size=640x360:rate=30:duration=8", "-c:v", "libx264",
            "-preset", "ultrafast", str(proj / "broll" / "castle-walls-timelapse.mp4"))
+        # A Short: build timelapse + a glamor shot, no voiceover (read from the short/ folder).
+        (proj / "short").mkdir()
+        ff("-f", "lavfi", "-i", "testsrc=size=320x180:rate=30:duration=6", "-c:v", "libx264",
+           "-preset", "ultrafast", str(proj / "short" / "castle timelapse.mp4"))
+        ff("-f", "lavfi", "-i", "smptebars=size=320x180:rate=30:duration=4", "-c:v", "libx264",
+           "-preset", "ultrafast", str(proj / "short" / "castle glamor.mp4"))
 
         # Fake editing pack, including a WebM overlay that needs converting for Resolve.
         pack = cls.tmp / "pack"
@@ -153,7 +159,8 @@ class EndToEnd(unittest.TestCase):
         import kdcut.music as music_mod
         music_mod.HISTORY_FILE = home / "music_history.json"
         cls.cfg = config._merge(cls.cfg, {"music": {"folders": [str(cls.tmp / "music")], "volume_db": -20},
-                                          "edit": {"overlays": True}})
+                                          "edit": {"overlays": True},
+                                          "shorts": {"fps": 30, "min_seconds": 6}})
         cls.cfg = config._merge(cls.cfg, {"vision": {"enabled": True, "min_gap": 8},
                                           "thumbnails": {"style": "classic", "characters_dir": str(chars),
                                                          "themes_dir": str(home / "themes")}})
@@ -359,6 +366,15 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("Text 'Diamonds'", self.review)
         root = ET.fromstring(self.xml.split("<!DOCTYPE fcpxml>", 1)[1])
         self.assertTrue(any(e.get("name") == "Text - Diamonds" for e in root.iter("video")))
+
+    def test_short_made_from_the_short_folder(self):
+        short = self.result["short"]
+        self.assertNotIn("error", short)
+        info = media.probe(short["video"])
+        self.assertEqual((info.width, info.height), (1080, 1920))
+        self.assertAlmostEqual(info.duration, 6.0 + 3.5, delta=0.15)
+        self.assertTrue(short["music"])          # a track from the music folder, under the Short
+        self.assertTrue(short["kit"].is_file())
 
     def test_music_on_its_own_track(self):
         root = ET.fromstring(self.xml.split("<!DOCTYPE fcpxml>", 1)[1])
