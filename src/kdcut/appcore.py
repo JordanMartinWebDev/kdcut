@@ -110,6 +110,22 @@ def validate(project: Project) -> list[str]:
     return problems
 
 
+WINDOW_FILE = Path.home() / ".kdcut" / "window.json"
+
+
+def load_window_geometry(path: Path | None = None) -> str:
+    try:
+        return str(json.loads((path or WINDOW_FILE).read_text(encoding="utf-8")).get("geometry") or "")
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return ""
+
+
+def save_window_geometry(geometry: str, path: Path | None = None) -> None:
+    path = path or WINDOW_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"geometry": geometry}), encoding="utf-8")
+
+
 def known_series(cfg: dict) -> list[str]:
     """Series that already have a thumbnail style saved."""
     d = Path(cfg["thumbnails"]["themes_dir"]).expanduser()

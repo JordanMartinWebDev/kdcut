@@ -27,8 +27,9 @@ from pathlib import Path
 
 from kdcut.config import HOME_DIR
 
+STATS_SCOPE = "https://www.googleapis.com/auth/yt-analytics.readonly"   # channel stats (read-only)
 SCOPES = ("https://www.googleapis.com/auth/youtube.upload "
-          "https://www.googleapis.com/auth/youtube.force-ssl")
+          "https://www.googleapis.com/auth/youtube.force-ssl " + STATS_SCOPE)
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 API = "https://www.googleapis.com/youtube/v3"
@@ -91,6 +92,15 @@ def _save_token(tok: dict) -> None:
 
 def signed_in() -> bool:
     return TOKEN_FILE.is_file() and CLIENT_FILE.is_file()
+
+
+def has_stats_access() -> bool:
+    """Signed in with the read-only analytics permission (older sign-ins only had uploads)."""
+    try:
+        tok = json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return STATS_SCOPE in tok.get("scope", "")
 
 
 def sign_out() -> None:

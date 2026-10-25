@@ -40,4 +40,22 @@ exe = EXE(
     console=False,
     upx=False,
 )
-coll = COLLECT(exe, a.binaries, a.datas, name="KDcut", upx=False)
+# kdcut-mcp.exe: a small console program the Claude desktop app starts to read channel stats.
+m = Analysis(
+    [os.path.join(here, "kdcut_mcp.py")],
+    pathex=[os.path.join(root, "src")],
+    hiddenimports=["kdcut.stats", "kdcut.youtube"],
+    excludes=["tkinter", "matplotlib", "IPython", "pytest", "torch", "PySide6", "faster_whisper",
+              "ctranslate2", "onnxruntime", "av", "numpy", "PIL"],
+    noarchive=False,
+)
+mpyz = PYZ(m.pure)
+mexe = EXE(
+    mpyz, m.scripts, [],
+    exclude_binaries=True,
+    name="kdcut-mcp",
+    icon=os.path.join(here, "kdcut.ico"),
+    console=True,
+    upx=False,
+)
+coll = COLLECT(exe, a.binaries, a.datas, mexe, m.binaries, m.datas, name="KDcut", upx=False)

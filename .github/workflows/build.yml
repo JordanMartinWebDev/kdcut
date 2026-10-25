@@ -89,6 +89,14 @@ jobs:
           if (Test-Path $log) { Note "warning" "kdcut.log" (Get-Content $log -Raw) }
           if ($p.ExitCode -ne 0) { throw "Self-test failed" }
 
+      - name: Self-test the stats server
+        shell: pwsh
+        run: |
+          $req = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' + "`n" + '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+          $out = $req | & "dist\KDcut\kdcut-mcp.exe"
+          Write-Output $out
+          if (-not ($out -match "channel_overview")) { throw "kdcut-mcp.exe didn't list its tools" }
+
       - name: Build installer
         shell: pwsh
         run: |
