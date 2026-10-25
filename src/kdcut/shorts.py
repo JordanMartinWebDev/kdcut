@@ -492,7 +492,8 @@ def render(p: ShortPlan, dest: Path, work: Path, scfg: dict, *, voice_file: Path
     else:
         filters.append(f"anullsrc=r=48000:cl=stereo,atrim=0:{p.total:.3f}[silence]")
         mix = "[silence]anull,"
-    filters.append(f"{mix}alimiter=limit=0.95:level=disabled,apad=whole_dur={p.total:.3f},"
+    loud = "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000," if audio else ""   # Shorts play loud
+    filters.append(f"{mix}{loud}alimiter=limit=0.95:level=disabled,apad=whole_dur={p.total:.3f},"
                    f"atrim=0:{p.total:.3f},afade=t=out:st={max(p.total - 0.6, 0):.3f}:d=0.6[aout]")
     cmd += ["-filter_complex", ";".join(filters), "-map", f"[{vlabel}]", "-map", "[aout]",
             "-t", f"{p.total:.3f}", "-r", str(fps),
@@ -647,7 +648,9 @@ def make(out: Path, cfg: dict, video: dict, short: ShortFiles, use_ai: bool = Tr
         if track is not None:
             vol = float(scfg["music_db"])
             speech = [(w.start, w.end) for w in placed]
-            gains = ducking.envelope(speech, p.total, talk_db=vol, gap_db=vol + 8.0)
+            # With nothing to talk over, the music is the soundtrack: full level.
+            gap = vol + 8.0 if speech else 0.0
+            gains = ducking.envelope(speech, p.total, talk_db=vol, gap_db=gap)
             try:
                 bed = ducking.render_bed([music.Placement(track, 0.0, 0.0, min(track.duration, p.total))],
                                          p.total, gains, work / "music_bed.m4a",
