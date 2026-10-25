@@ -97,7 +97,8 @@ def _clock(sec: float) -> str:
 
 
 def run_watched(cmd: list[str], total: float, *, label: str = "ffmpeg", log=None,
-                stall: float = 60.0, timeout: float | None = None) -> subprocess.CompletedProcess:
+                stall: float = 60.0, timeout: float | None = None,
+                cwd: Path | None = None) -> subprocess.CompletedProcess:
     """Run a long ffmpeg job, reporting how far it has got and killing it if it stops
     making progress for `stall` seconds. Never raises for ffmpeg's own failures:
     check .returncode (-9 = stalled or timed out) and .stderr."""
@@ -109,7 +110,7 @@ def run_watched(cmd: list[str], total: float, *, label: str = "ffmpeg", log=None
     debug(f"run: {subprocess.list2cmdline(full)}")
     err = tempfile.TemporaryFile()
     proc = subprocess.Popen(full, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err,
-                            creationflags=NO_WINDOW)
+                            creationflags=NO_WINDOW, cwd=str(cwd) if cwd else None)
     state = {"t": 0.0, "changed": _t.monotonic(), "speed": ""}
 
     def reader():

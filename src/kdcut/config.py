@@ -67,6 +67,26 @@ DEFAULTS: dict[str, Any] = {
         "duck": True,              # dip the music while you talk
         "vibe": "upbeat",          # upbeat: happy/adventurous, medium-high energy | chill | any
     },
+    # Vertical Shorts: build timelapse + glamor shots + voiceover -> finished 1080x1920 MP4.
+    "shorts": {
+        "enabled": True,
+        "max_seconds": 58,          # under a minute keeps it a Short everywhere
+        "min_seconds": 12,
+        "timelapse_seconds": 20,    # timelapse length when there's no voiceover to fit
+        "glamor_seconds": 3.5,      # each glamor shot (the reveal)
+        "reveal_share": 0.4,        # the reveal takes at most this share of the Short
+        "layout": "blur",           # blur: gameplay big in the middle, blurred copy behind | crop: fill the screen
+        "zoom": 1.25,               # blur layout: how much bigger than full-width the gameplay is (crops the sides)
+        "font": "",                 # font file for captions; blank = a bubbly font from your packs
+        "highlight": "#FFC440",     # colour of the word being said
+        "caption_y": 0.72,          # where captions sit (share of the height from the top)
+        "title_y": 0.14,
+        "title": True,              # bubbly title at the top (yours, or one the AI writes)
+        "music": True,
+        "music_db": -12,            # music under your voice; it comes up 8 dB in the gaps
+        "reveal_sfx": True,         # a whoosh from your packs on the flash into the reveal
+        "fps": "auto",              # auto = the timelapse's rate, at most 60
+    },
     "thumbnails": {
         "enabled": True,
         "style": "showcase",       # showcase: the build/view is the hook | classic: hook words + icons

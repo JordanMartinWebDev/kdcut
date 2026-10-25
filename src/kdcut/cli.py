@@ -4,6 +4,7 @@
     kdcut init  <folder>             create a new episode folder
     kdcut index-assets [pack ...]    scan editing packs (run once, and after adding packs)
     kdcut build <folder>             recordings -> Resolve timeline + review + upload kit
+    kdcut short <folder>             just the vertical Short from the folder's short/ files
     kdcut find  "level up" --sfx     test what the asset search picks
     kdcut doctor                     check ffmpeg, GPU, API key, packs
 """
@@ -31,7 +32,7 @@ def cmd_setup(args) -> int:
 
 def cmd_init(args) -> int:
     p = Path(args.folder)
-    for sub in ("recordings", "broll", "timelapses", "output"):
+    for sub in ("recordings", "broll", "timelapses", "short", "output"):
         (p / sub).mkdir(parents=True, exist_ok=True)
     toml = p / "kdcut.toml"
     if not toml.exists():
@@ -40,7 +41,9 @@ def cmd_init(args) -> int:
     print("  1. Put your OBS recordings in recordings/ (they're edited in filename order)")
     print("  2. Optional: Flashback renders to show while you talk go in broll/; silent timelapses that")
     print("     play as their own scene go in timelapses/, with any voiceover audio for them")
-    print("  3. Fill in the topic in kdcut.toml, then run:  kdcut build \"" + str(p) + "\"")
+    print("  3. Optional Short: a build timelapse, glamor shots (put 'glamor' in their names) and a")
+    print("     voiceover go in short/")
+    print("  4. Fill in the topic in kdcut.toml, then run:  kdcut build \"" + str(p) + "\"")
     return 0
 
 
@@ -78,6 +81,24 @@ def cmd_build(args) -> int:
     cfg = config.load(project)
     pipeline.run(project, cfg, use_ai=not args.no_ai, retranscribe=args.retranscribe,
                  replan=args.replan)
+    return 0
+
+
+def cmd_short(args) -> int:
+    from kdcut import pipeline, shorts
+    project = Path(args.folder).resolve()
+    cfg = config.load(project)
+    short = shorts.from_folder(project / "short")
+    if short is None:
+        print(f"No Short files in {project / 'short'}. Put a build timelapse, glamor shots "
+              "(with 'glamor' in the name) and a voiceover there.")
+        return 1
+    video = {"title": project.name, **pipeline._video_settings(project)}
+    res = pipeline.make_short(project / "output", cfg, video, short, use_ai=not args.no_ai)
+    if not res or res.get("error"):
+        return 1
+    for n in res["notes"]:
+        print(f"  check: {n}")
     return 0
 
 
@@ -144,6 +165,11 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--replan", action="store_true", help="ignore the saved plan.json and ask the AI again")
     s.add_argument("--retranscribe", action="store_true")
     s.set_defaults(fn=cmd_build)
+
+    s = sub.add_parser("short", help="make just the vertical Short from short/")
+    s.add_argument("folder")
+    s.add_argument("--no-ai", action="store_true", help="simple titles instead of AI ones")
+    s.set_defaults(fn=cmd_short)
 
     s = sub.add_parser("doctor", help="check your setup")
     s.set_defaults(fn=cmd_doctor)

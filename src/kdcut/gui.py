@@ -1078,8 +1078,13 @@ class MainWindow(QMainWindow):
         self.shots = DropList(appcore.SCREENSHOT_EXTS,
                               "Drag in-game screenshots for the thumbnail here (up to 5; 3+ allows a collage)",
                               sort_on_add=False)
-        lists.addWidget(drop_section("Thumbnail", "F2 screenshots from Minecraft work great.", self.shots,
-                                     "Images (*.png *.jpg *.jpeg *.webp *.bmp)", self), 2)
+        self.shots.setMinimumHeight(90)
+        right = QVBoxLayout()
+        right.setSpacing(10)
+        right.addWidget(drop_section("Thumbnail", "F2 screenshots from Minecraft work great.", self.shots,
+                                     "Images (*.png *.jpg *.jpeg *.webp *.bmp)", self), 1)
+        right.addWidget(self._short_section(vid_filter), 1)
+        lists.addLayout(right, 2)
         v.addLayout(lists, 1)
 
         opts = QHBoxLayout()
@@ -1120,6 +1125,57 @@ class MainWindow(QMainWindow):
             w.connect(lambda *a: self.refresh_ready())
         self.use_ai.toggled.connect(self.vision.setEnabled)
         return page
+
+    def _short_section(self, vid_filter: str) -> QWidget:
+        """Three small boxes for the vertical Short: timelapse, glamor shots, voiceover."""
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(4)
+        head = QHBoxLayout()
+        head.addWidget(label("Short", "section", wrap=False))
+        head.addStretch(1)
+        clear = QPushButton("Clear")
+        head.addWidget(clear)
+        v.addLayout(head)
+        v.addWidget(label("Optional: a vertical Short with bubbly captions, made when you edit. The "
+                          "timelapse plays under your voiceover, then the glamor shots reveal the build.", "hint"))
+        audio_filter = "Voiceover (*.wav *.mp3 *.m4a *.flac *.ogg *.aac)"
+        self.short_tl = DropList(appcore.SHORT_VIDEO_EXTS, "Build timelapse", sort_on_add=False)
+        self.short_glam = DropList(appcore.SHORT_VIDEO_EXTS, "Glamor shots of the finished build (in order)",
+                                   sort_on_add=False)
+        self.short_vo = DropList(appcore.SHORT_AUDIO_EXTS, "Voiceover (one audio file)", sort_on_add=False)
+        self.short_tl.setToolTip("Sped up (or slowed a little) so it lasts as long as your voiceover.")
+        self.short_glam.setToolTip("Each plays about 3.5 seconds after a white flash: the reveal. "
+                                   "Flashback camera paths around the finished build work great.")
+        self.short_vo.setToolTip("Long pauses and anything after 'cut that' are taken out. Captions come "
+                                 "from what you say.")
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(4)
+        for row, (name, lst, filt) in enumerate([("Timelapse", self.short_tl, vid_filter),
+                                                 ("Glamor", self.short_glam, vid_filter),
+                                                 ("Voiceover", self.short_vo, audio_filter)]):
+            lst.setMinimumHeight(44)
+            add = QPushButton("Add…")
+
+            def pick(_=False, lst=lst, filt=filt, name=name):
+                files, _ = QFileDialog.getOpenFileNames(self, f"Short: {name}", "", filt)
+                if files:
+                    lst.add_paths(files)
+
+            add.clicked.connect(pick)
+            grid.addWidget(label(name, "hint", wrap=False), row, 0)
+            grid.addWidget(lst, row, 1)
+            grid.addWidget(add, row, 2, Qt.AlignmentFlag.AlignTop)
+        grid.setColumnStretch(1, 1)
+        v.addLayout(grid, 1)
+        self.short_title = QLineEdit()
+        self.short_title.setPlaceholderText("Title on the Short (blank: the AI writes one)")
+        v.addWidget(self.short_title)
+        clear.clicked.connect(lambda: (self.short_tl.set_paths([]), self.short_glam.set_paths([]),
+                                       self.short_vo.set_paths([]), self.short_title.clear()))
+        return box
 
     # -- page 2: working ---------------------------------------------------------------
     def _build_work_page(self) -> QWidget:
@@ -1182,11 +1238,15 @@ class MainWindow(QMainWindow):
             ("Copy description + chapters", "", lambda: self.copy_kit("description")),
             ("Upload to YouTube…", "Private or scheduled, with title, chapters, captions, thumbnail",
              self.open_upload),
+            ("Play the Short", "The vertical Short, ready to upload", self.play_short),
+            ("Open Short kit", "Titles and description for the Short", self.open_short_kit),
             ("Open video folder", "Everything for this video", lambda: open_path(self.out_dir)),
         ]
+        self.done_buttons: dict[str, QPushButton] = {}
         for i, (text, hint, fn) in enumerate(buttons):
             b = QPushButton(text)
             b.clicked.connect(fn)
+            self.done_buttons[text] = b
             g.addWidget(b, i, 0)
             g.addWidget(label(hint, "hint"), i, 1)
         v.addWidget(card)
@@ -1228,7 +1288,11 @@ class MainWindow(QMainWindow):
                                broll=[str(p) for p in self.broll.paths()],
                                timelapses=[str(p) for p in self.timelapses.paths()],
                                series=self.series.currentText().strip(), episode=self.episode.text().strip(),
-                               screenshots=[str(p) for p in self.shots.paths()[:5]])
+                               screenshots=[str(p) for p in self.shots.paths()[:5]],
+                               short_timelapses=[str(p) for p in self.short_tl.paths()],
+                               short_glamor=[str(p) for p in self.short_glam.paths()],
+                               short_voiceover=[str(p) for p in self.short_vo.paths()[:1]],
+                               short_title=self.short_title.text().strip())
 
     def video_info(self, proj: appcore.Project) -> dict:
         return {"title": proj.name, "topic": proj.topic, "series": proj.series, "episode": proj.episode,
@@ -1266,6 +1330,10 @@ class MainWindow(QMainWindow):
         self.series.setCurrentText(p.series)
         self.episode.setText(p.episode)
         self.shots.set_paths([Path(x) for x in p.screenshots])
+        self.short_tl.set_paths([Path(x) for x in p.short_timelapses])
+        self.short_glam.set_paths([Path(x) for x in p.short_glamor])
+        self.short_vo.set_paths([Path(x) for x in p.short_voiceover])
+        self.short_title.setText(p.short_title)
 
     def new_video(self):
         self.name.clear()
@@ -1274,6 +1342,10 @@ class MainWindow(QMainWindow):
         self.broll.set_paths([])
         self.timelapses.set_paths([])
         self.shots.set_paths([])
+        self.short_tl.set_paths([])
+        self.short_glam.set_paths([])
+        self.short_vo.set_paths([])
+        self.short_title.clear()
         try:  # next episode of the same series is the common case
             self.episode.setText(str(int(self.episode.text()) + 1))
         except ValueError:
@@ -1320,7 +1392,7 @@ class MainWindow(QMainWindow):
                                 recordings=[Path(r) for r in proj.recordings],
                                 broll_files=[Path(b) for b in proj.broll], video=video,
                                 timelapse_files=[Path(t) for t in proj.timelapses],
-                                out_dir=out, reporter=reporter)
+                                short=proj.short_files(), out_dir=out, reporter=reporter)
 
         run_in_thread(self.bridge, work, self.stop)
 
@@ -1350,9 +1422,22 @@ class MainWindow(QMainWindow):
         notes = result["plan"].notes
         self.notes_box.setText(("The AI asks you to check:\n• " + "\n• ".join(notes)) if notes else "")
         self.show_thumbnails(result.get("thumbnails") or [])
+        made = bool(result.get("short") and result["short"].get("video"))
+        self.done_buttons["Play the Short"].setEnabled(made)
+        self.done_buttons["Open Short kit"].setEnabled(made)
         self.fresh.setChecked(False)
         self.pages.setCurrentIndex(2)
         QApplication.alert(self)
+
+    def play_short(self):
+        short = (self.result or {}).get("short") or {}
+        if short.get("video") and Path(short["video"]).exists():
+            open_path(Path(short["video"]))
+
+    def open_short_kit(self):
+        short = (self.result or {}).get("short") or {}
+        if short.get("kit") and Path(short["kit"]).exists():
+            open_path(Path(short["kit"]))
 
     def show_thumbnails(self, paths: list[Path]):
         while self.thumb_row.count():

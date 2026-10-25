@@ -8,6 +8,7 @@ Command-line project folder layout (created by `kdcut init`):
       recordings/   raw OBS sessions, in recording order (MKV or MP4)
       broll/        Flashback renders shown over the gameplay while you talk
       timelapses/   silent timelapses that play as their own scene, plus voiceover audio
+      short/        optional vertical Short: build timelapse, glamor shots, a voiceover
       kdcut.toml    optional per-video settings (topic, series, style notes)
       output/       everything kdcut produces
 """
@@ -21,7 +22,7 @@ from pathlib import Path
 from kdcut import blocks as blocks_mod
 from kdcut import audioprep, broll as broll_mod, captions, clues, continuity, graphics, vad, ducking, fcpxml, media, metadata, music, planner, transcribe, vision
 from kdcut import montage as montage_mod, signals as signals_mod, speedup, story
-from kdcut import timelapse as timelapse_mod
+from kdcut import shorts, timelapse as timelapse_mod
 from kdcut.assets import AssetIndex
 from kdcut.blocks import fmt_ts
 from kdcut.planner import Plan
@@ -73,12 +74,13 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         replan: bool = False, caller=None, *, recordings: list[Path] | None = None,
         broll_files: list[Path] | None = None, video: dict | None = None,
         out_dir: Path | None = None, reporter: Reporter | None = None,
-        timelapse_files: list[Path] | None = None) -> dict:
+        timelapse_files: list[Path] | None = None, short=None) -> dict:
     """Edit one video.
 
     Command line: pass just `project` (folder with recordings/ and broll/).
     Desktop app: pass explicit `recordings`, `broll_files`, `timelapse_files`, `video` and `out_dir`.
     `timelapse_files` mixes timelapse videos and voiceover audio.
+    `short` is a shorts.ShortFiles; the command line reads the project's short/ folder.
     """
     r = reporter or Reporter()
     project = Path(project).resolve()
@@ -941,11 +943,15 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         except Exception as exc:  # thumbnails are a bonus; never lose the edit over them
             r.log(f"Thumbnails skipped: {exc}")
 
+    short_result = make_short(out, cfg, {**video, "title": name},
+                              short if short is not None else shorts.from_folder(project / "short"),
+                              use_ai, caller=call, log=r.log, index=index, force=retranscribe)
+
     return {"timeline": xml_path, "final_seconds": final, "raw_seconds": raw_total,
             "end_screen": end_screen.image if end_screen else None, "end_screen_seconds": es_secs,
             "placed": placed, "plan": plan, "clips": len(tl.main), "out_dir": out,
             "review": out / "review.md", "upload_kit": out / "upload_kit.md",
-            "thumbnails": thumbs}
+            "thumbnails": thumbs, "short": short_result}
 
 
 END_SCREEN_POSES = ("point_side", "presenting", "point_viewer", "wave")
@@ -1053,6 +1059,22 @@ def make_thumbnails(out: Path, cfg: dict, video: dict, screenshots: list[Path], 
     return thumbnails.make(cfg, video, screenshots, out, titles=kit.get("titles") or [video.get("title", "")],
                            text_ideas=kit.get("thumbnail_text") or [], index=index, use_ai=use_ai,
                            caller=caller or planner.llm.call_tool, log=log)
+
+
+def make_short(out: Path, cfg: dict, video: dict, short, use_ai: bool, caller=None, log=print,
+               index: AssetIndex | None = None, force: bool = False) -> dict | None:
+    """The vertical Short, when there are files for one. A bonus: never loses the edit."""
+    if short is None or short.empty() or not cfg.get("shorts", {}).get("enabled", True):
+        return None
+    if index is None:
+        index = AssetIndex.load(Path(cfg["assets"]["index_path"]))
+    try:
+        return shorts.make(out, cfg, video, short, use_ai, caller=caller or planner.llm.call_tool,
+                           log=log, index=index, force=force)
+    except Exception as exc:
+        media.debug(f"short failed: {exc!r}")
+        log(f"Short skipped: {exc}")
+        return {"error": str(exc)}
 
 
 def _safe(name: str) -> str:

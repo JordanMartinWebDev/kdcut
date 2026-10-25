@@ -114,6 +114,48 @@ are also in `review.md`.
 Settings in `edit`: `end_screen`, `end_screen_seconds` (5-20), `end_screen_pose`, and
 `end_screen_labels` (`{series}` becomes the series name).
 
+## Shorts
+
+Drop three things into the **Short** boxes (all optional except something to show):
+
+- **Timelapse**: the Flashback timelapse of the build
+- **Glamor**: one or more cinematic shots of the finished build, in the order you want them
+- **Voiceover**: a short audio file of you talking about the build
+
+When you click **Edit my video**, KDcut also makes a finished vertical Short (1080x1920 MP4, no
+Resolve step) in the video's `short` folder:
+
+1. The timelapse plays while you talk. It's sped up (or slowed to half speed at most) so it lasts
+   as long as your voiceover; with no voiceover it runs about 20 seconds.
+2. A white flash, a whoosh from your packs if there is one, then the glamor shots: about
+   3.5 seconds each, from the middle of each camera move. This is the reveal.
+3. Captions are big and bubbly, two or three words at a time, with the word you're saying
+   popping in mustard yellow. A title sits at the top the whole time: type one in the box, or
+   leave it blank and the AI writes one.
+4. Music from your library plays under it and dips while you talk. Long pauses and anything
+   after "cut that" are taken out of the voiceover, like in the main edit.
+
+It's kept under 60 seconds. `short/short_kit.md` has titles, a description with hashtags, and a
+reminder to set the Short's **Related video** to the full episode in YouTube Studio. The results
+screen has **Play the Short** and **Open Short kit**.
+
+The caption font is the bubbliest one in your packs (Luckiest Guy, Lilita One, Komika, Burbank
+and the like), else Arial Black. Pick your own with `font` under `[shorts]`:
+
+```toml
+[shorts]
+font = "C:/Users/jorda/Downloads/fonts/LuckiestGuy-Regular.ttf"
+layout = "blur"       # blur: gameplay big in the middle over a blurred copy | crop: fill the screen
+zoom = 1.25           # blur layout: how far the gameplay is zoomed (crops the sides)
+highlight = "#FFC440" # colour of the word being said
+max_seconds = 58
+```
+
+Command line: put the files in the episode's `short/` folder (audio is the voiceover; videos with
+glamor, reveal, showcase, cinematic, flyover or final in the name are glamor shots; anything else
+is the timelapse; an optional `title.txt` is the on-screen title). `kdcut build` makes the Short
+with the episode, and `kdcut short <folder>` makes just the Short.
+
 ## How the AI edits
 
 It's a let's-play, so your talking is the content: the AI keeps the story, your stories and your
@@ -381,3 +423,4 @@ whole pipeline, including that every cut in the FCPXML lands on a whole frame.
 - [x] Captions (.srt) timed to the edit
 - [x] Upload to YouTube as private or scheduled, with title, chapters, captions and thumbnail
 - [x] Desktop app with drag and drop, and a Windows installer built by GitHub Actions
+- [x] Vertical Shorts from a build timelapse, glamor shots and a voiceover, with bubbly captions
