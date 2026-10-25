@@ -5,6 +5,8 @@
     kdcut index-assets [pack ...]    scan editing packs (run once, and after adding packs)
     kdcut build <folder>             recordings -> Resolve timeline + review + upload kit
     kdcut short <folder>             just the vertical Short from the folder's short/ files
+    kdcut stats                      save a snapshot of your YouTube channel stats
+    kdcut mcp                        channel stats server for the Claude desktop app (stdio)
     kdcut find  "level up" --sfx     test what the asset search picks
     kdcut doctor                     check ffmpeg, GPU, API key, packs
 """
@@ -102,6 +104,19 @@ def cmd_short(args) -> int:
     return 0
 
 
+def cmd_stats(args) -> int:
+    from kdcut import stats
+    cfg = config.load()
+    folder = Path(args.folder) if args.folder else stats.default_folder(cfg)
+    stats.snapshot(folder)
+    return 0
+
+
+def cmd_mcp(args) -> int:
+    from kdcut import mcp_server
+    return mcp_server.main()
+
+
 def cmd_doctor(args) -> int:
     cfg = config.load()
     ok = True
@@ -170,6 +185,13 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("folder")
     s.add_argument("--no-ai", action="store_true", help="simple titles instead of AI ones")
     s.set_defaults(fn=cmd_short)
+
+    s = sub.add_parser("stats", help="save a snapshot of your channel stats")
+    s.add_argument("--folder", help="where to save it (default: Videos/KDcut/Channel stats)")
+    s.set_defaults(fn=cmd_stats)
+
+    s = sub.add_parser("mcp", help="channel stats server for the Claude desktop app")
+    s.set_defaults(fn=cmd_mcp)
 
     s = sub.add_parser("doctor", help="check your setup")
     s.set_defaults(fn=cmd_doctor)

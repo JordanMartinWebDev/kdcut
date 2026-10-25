@@ -222,7 +222,8 @@ This is a one-time setup that takes about 5 minutes. YouTube only lets apps uplo
 Cloud project you own; it's free.
 
 1. Go to <https://console.cloud.google.com>, create a project (name it "KDcut").
-2. **APIs & Services → Library**, search **YouTube Data API v3**, and click **Enable**.
+2. **APIs & Services → Library**, search **YouTube Data API v3**, and click **Enable**. For channel
+   stats (below), also enable **YouTube Analytics API** and **YouTube Reporting API**.
 3. **Google Auth Platform** (or "OAuth consent screen"): choose **External**, name it KDcut, and use your
    email. Under **Audience**, add your Google account as a test user.
 4. **Clients → Create client → Desktop app**. Download the JSON file.
@@ -235,6 +236,36 @@ Two things to know:
   warning when you sign in, which you can pass with **Advanced → Go to KDcut**. That's expected for a
   private tool only you use.
 - Custom thumbnails need a verified channel (phone verification at youtube.com/verify).
+
+## Channel stats for Claude
+
+Claude can read your YouTube Studio numbers during a chat, so you can ask "how's the new episode
+doing?" without screenshots. It only reads; it can't upload, change or delete anything.
+
+1. In Google Cloud, enable **YouTube Analytics API** and **YouTube Reporting API** (same project as
+   uploads; see Connecting YouTube above).
+2. KDcut **Settings → Channel stats → Allow channel stats**, and approve read-only access in the
+   browser.
+3. Click **Connect to Claude**, then quit and reopen the Claude desktop app.
+4. Optional: tick **Save a snapshot every morning**. A Windows scheduled task saves the latest
+   numbers at 7:00 to `Videos\KDcut\Channel stats` (`latest.json` and a readable `latest.md`),
+   for when your PC is asleep later in the day.
+
+What Claude can look up:
+
+| Tool | What it returns |
+|---|---|
+| `channel_overview` | Views, watch time, average view duration, subscribers gained/lost, likes for the last N days vs the N days before, split into Shorts and long-form |
+| `recent_videos` | Your latest uploads with views, average view duration and percentage, subscribers gained, impressions and click-through rate |
+| `video_details` | One video: totals, daily views for 14 days, traffic sources, the retention curve, impressions and CTR |
+| `traffic_sources` | Browse, Suggested, Search, Shorts feed and the rest, for the channel or one video |
+
+Impressions and click-through rate come from YouTube's daily reports, which KDcut requests once and
+reads as they arrive: they start a day or two after you connect and always run 1-2 days behind.
+
+Connecting adds a `kdcut` entry to the Claude app's `claude_desktop_config.json` (other entries
+are kept, and a `.backup` is written first). From source, the server runs as
+`python -m kdcut.mcp_server`; `kdcut stats` saves a snapshot by hand.
 
 ## Letting the AI look at the footage
 
@@ -424,3 +455,4 @@ whole pipeline, including that every cut in the FCPXML lands on a whole frame.
 - [x] Upload to YouTube as private or scheduled, with title, chapters, captions and thumbnail
 - [x] Desktop app with drag and drop, and a Windows installer built by GitHub Actions
 - [x] Vertical Shorts from a build timelapse, glamor shots and a voiceover, with bubbly captions
+- [x] Channel stats Claude can read live (views, retention, traffic sources, impressions, CTR)

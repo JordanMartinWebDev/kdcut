@@ -10,7 +10,7 @@ import threading
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QDateTime, QObject, Qt, QUrl, Signal
+from PySide6.QtCore import QByteArray, QDateTime, QObject, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QFont, QGuiApplication, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateTimeEdit, QDialog, QDialogButtonBox, QFileDialog,
@@ -27,6 +27,13 @@ APP_NAME = "KDcut"
 STYLE = """
 * { font-family: 'Segoe UI', 'Inter', sans-serif; font-size: 10.5pt; color: #e9eaec; }
 QMainWindow, QDialog, QWidget#page { background: #1b1c1f; }
+QScrollArea#pagescroll, QScrollArea#pagescroll > QWidget { background: #1b1c1f; border: none; }
+QScrollBar:vertical { background: #1b1c1f; width: 12px; margin: 0; }
+QScrollBar::handle:vertical { background: #3a3d44; border-radius: 5px; min-height: 40px; margin: 2px; }
+QScrollBar::handle:vertical:hover { background: #50545c; }
+QScrollBar:horizontal { background: #1b1c1f; height: 12px; margin: 0; }
+QScrollBar::handle:horizontal { background: #3a3d44; border-radius: 5px; min-width: 40px; margin: 2px; }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 QLabel#title { font-size: 20pt; font-weight: 700; color: #ffffff; }
 QLabel#subtitle { color: #9a9ca3; }
 QLabel#section { font-size: 11.5pt; font-weight: 600; color: #ffffff; margin-top: 6px; }
@@ -249,6 +256,17 @@ class ThumbLabel(QLabel):
         open_path(self.path)
 
 
+def scrollable(page: QWidget) -> QScrollArea:
+    """Wrap a page so it scrolls instead of squashing when the window is small."""
+    area = QScrollArea()
+    area.setObjectName("pagescroll")
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.Shape.NoFrame)
+    area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    area.setWidget(page)
+    return area
+
+
 def drop_section(title: str, hint: str, lst: DropList, file_filter: str, parent: QWidget) -> QWidget:
     box = QWidget()
     v = QVBoxLayout(box)
@@ -287,7 +305,9 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(f"{APP_NAME} settings")
         self.setMinimumWidth(680)
-        self.resize(720, 760)
+        screen = QGuiApplication.primaryScreen()
+        avail_h = screen.availableGeometry().height() if screen else 900
+        self.resize(820, max(min(int(avail_h * 0.85), 980), 600))
         self.settings = config.load_settings()
         cfg = config.load()
         self.bridge = Bridge()
@@ -502,6 +522,31 @@ class SettingsDialog(QDialog):
         guide.setOpenExternalLinks(True)
         ybox.addWidget(guide)
         form.addRow("YouTube", ybox)
+
+        self.stats_status = label("", "hint")
+        self.stats_allow = QPushButton("Allow channel stats")
+        self.stats_allow.setToolTip("Signs in again so KDcut may read (never change) your YouTube Studio numbers.")
+        self.stats_allow.clicked.connect(self.allow_stats)
+        self.stats_connect = QPushButton("Connect to Claude")
+        self.stats_connect.setToolTip("Lets Claude (desktop app) read your channel's numbers during chats.")
+        self.stats_connect.clicked.connect(self.connect_claude)
+        self.stats_daily = QCheckBox("Save a snapshot every morning")
+        self.stats_daily.setToolTip("A Windows scheduled task saves the latest numbers to "
+                                    "Videos\\KDcut\\Channel stats at 7:00, so they're there even "
+                                    "when your PC is asleep later.")
+        from kdcut import claude_link
+        self.stats_daily.setChecked(claude_link.scheduled())
+        self.stats_daily.toggled.connect(self.toggle_daily_stats)
+        srow = QHBoxLayout()
+        srow.addWidget(self.stats_allow)
+        srow.addWidget(self.stats_connect)
+        srow.addSpacing(12)
+        srow.addWidget(self.stats_daily)
+        srow.addStretch(1)
+        sbox = QVBoxLayout()
+        sbox.addLayout(srow)
+        sbox.addWidget(self.stats_status)
+        form.addRow("Channel stats", sbox)
         self.refresh_yt()
 
         inner = QWidget()
@@ -589,6 +634,69 @@ class SettingsDialog(QDialog):
             self.yt_status.setText("Client file saved. Click Sign in to connect your channel.")
             self.yt_sign.setEnabled(True)
             self.yt_sign.setText("Sign in")
+        if hasattr(self, "stats_status"):
+            self.refresh_stats()
+
+    def refresh_stats(self):
+        from kdcut import claude_link, youtube
+        signed = youtube.signed_in()
+        access = signed and youtube.has_stats_access()
+        self.stats_allow.setVisible(signed and not access)
+        self.stats_connect.setEnabled(access)
+        self.stats_daily.setEnabled(access)
+        if not signed:
+            self.stats_status.setText("Sign in to YouTube above first.")
+        elif not access:
+            self.stats_status.setText("Click Allow channel stats and approve read-only access in the browser. "
+                                      "Turn on the YouTube Analytics API and YouTube Reporting API in your "
+                                      "Google Cloud project first.")
+        elif claude_link.connected():
+            self.stats_status.setText("✔ Claude can read your channel stats (restart the Claude app if you "
+                                      "just connected).")
+        else:
+            self.stats_status.setText("Click Connect to Claude, then quit and reopen the Claude desktop app.")
+
+    def allow_stats(self):
+        from kdcut import youtube
+        youtube.sign_out()
+        self.yt_sign_in_out()
+
+    def connect_claude(self):
+        from kdcut import claude_link, stats
+        try:
+            paths = claude_link.connect()
+        except Exception as exc:
+            QMessageBox.warning(self, APP_NAME, f"Couldn't connect to Claude:\n{exc}")
+            return
+        self.stats_status.setText("Checking your channel stats…")
+        bridge = self.stats_bridge = Bridge()
+
+        def ok(path):
+            self.refresh_stats()
+            QMessageBox.information(self, APP_NAME, "Connected. Quit and reopen the Claude desktop app, then "
+                                    "ask Claude about your channel.\n\nThe first stats snapshot is in:\n"
+                                    f"{Path(path).parent}\n\nImpressions and click-through rate start "
+                                    "showing up a day or two from now (YouTube sends them daily).\n\n"
+                                    "Claude config: " + ", ".join(str(p) for p in paths))
+
+        def bad(e):
+            self.refresh_stats()
+            QMessageBox.warning(self, APP_NAME, f"Connected to Claude, but reading your stats failed:\n{e}")
+
+        bridge.done.connect(ok)
+        bridge.failed.connect(bad)
+        cfg = config.load()
+        run_in_thread(bridge, lambda: stats.snapshot(stats.default_folder(cfg), log=media.debug))
+
+    def toggle_daily_stats(self, on: bool):
+        from kdcut import claude_link
+        try:
+            claude_link.schedule_daily() if on else claude_link.unschedule_daily()
+        except Exception as exc:
+            QMessageBox.warning(self, APP_NAME, f"Couldn't set up the morning snapshot:\n{exc}")
+            self.stats_daily.blockSignals(True)
+            self.stats_daily.setChecked(False)
+            self.stats_daily.blockSignals(False)
 
     def pick_yt_client(self):
         from kdcut import youtube
@@ -945,7 +1053,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(f"{APP_NAME} {updater.current_version()}")
         self.update_info = None
-        self.resize(980, 760)
+        self.setMinimumSize(860, 600)
+        self._size_window()
         self.bridge = Bridge()
         self.stop = threading.Event()
         self.result: dict | None = None
@@ -953,9 +1062,10 @@ class MainWindow(QMainWindow):
 
         self.pages = QStackedWidget()
         self.setCentralWidget(self.pages)
-        self.pages.addWidget(self._build_setup_page())
-        self.pages.addWidget(self._build_work_page())
-        self.pages.addWidget(self._build_done_page())
+        # Each page scrolls when the window is smaller than its contents.
+        self.pages.addWidget(scrollable(self._build_setup_page()))
+        self.pages.addWidget(scrollable(self._build_work_page()))
+        self.pages.addWidget(scrollable(self._build_done_page()))
 
         b = self.bridge
         b.step.connect(self.on_step)
@@ -965,6 +1075,24 @@ class MainWindow(QMainWindow):
         b.failed.connect(self.on_failed)
         b.cancelled.connect(self.on_cancelled)
         self.refresh_ready()
+
+    def _size_window(self):
+        """Open big enough to see every box: the size you last left it, else most of the screen."""
+        screen = QGuiApplication.primaryScreen()
+        area = screen.availableGeometry() if screen else None
+        saved = appcore.load_window_geometry()
+        if saved and self.restoreGeometry(QByteArray.fromBase64(saved.encode("ascii"))):
+            if area is None or area.intersects(self.frameGeometry()):
+                return
+        if area is None:
+            self.resize(1360, 920)
+            return
+        w = min(max(int(area.width() * 0.86), 1280), area.width())
+        h = min(max(int(area.height() * 0.9), 900), area.height())
+        self.resize(w, h)
+        self.move(area.x() + (area.width() - w) // 2, area.y() + (area.height() - h) // 2)
+        if area.width() < 1300 or area.height() < 860:
+            self.setWindowState(Qt.WindowState.WindowMaximized)
 
     # -- page 1: set up the video ------------------------------------------------------
     def _build_setup_page(self) -> QWidget:
@@ -1629,6 +1757,10 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
             self.stop.set()
+        try:
+            appcore.save_window_geometry(bytes(self.saveGeometry().toBase64()).decode("ascii"))
+        except Exception:
+            pass
         super().closeEvent(event)
 
 
@@ -1671,6 +1803,14 @@ def main(argv=None) -> int:
     argv = list(sys.argv if argv is None else argv)
     _redirect_output_if_windowed()
     appcore.use_bundled_ffmpeg()
+    if "--stats-snapshot" in argv:      # the morning scheduled task: no window
+        from kdcut import stats
+        try:
+            stats.snapshot(stats.default_folder(config.load()), log=media.debug)
+            return 0
+        except Exception as exc:
+            media.debug(f"stats snapshot failed: {exc}")
+            return 1
     if "--selftest" in argv:
         from kdcut import selftest
         out = argv[argv.index("--selftest") + 1] if len(argv) > argv.index("--selftest") + 1 else "selftest.json"
