@@ -27,6 +27,20 @@ class CutBetweenTests(unittest.TestCase):
         self.assertTrue(clean)
         self.assertTrue(4.0 <= t <= 4.4)
 
+    def test_kept_word_isnt_cut_at_a_dip_inside_it(self):
+        """Episode 3, rec 1: '...ridiculous without them.' then the cut line 'so step number one',
+        which Whisper timed on top of 'them' (61.98 s). The mic dips for 0.06 s inside 'them'
+        at 61.88 s; the real pause starts at 62.18 s."""
+        from kdcut.planner import Plan
+        from kdcut.timeline import kept_ranges
+        v = voice([(59.8, 61.88), (61.94, 62.18), (64.0, 66.0)], total=70.0)
+        bl = [Block("B5", 0, 59.42, 61.98, "This game is honestly ridiculous without them."),
+              Block("B6", 0, 61.98, 66.0, "so step number one of today")]
+        r = kept_ranges(bl, Plan(drop={"B6": "fragment"}), [70.0],
+                        {"pad_before": 0.1, "pad_after": 0.2, "keep_pauses_up_to": 0.45}, voices={0: v})
+        self.assertGreaterEqual(r[0].end, 62.18)              # all of "them"
+        self.assertLess(r[0].end, 64.0)                       # none of the cut line
+
     def test_one_breath_has_no_clean_cut(self):
         v = voice([(4.7, 9.9)])                       # "that new world feeling let's go"
         self.assertFalse(v.cut_between(7.58, 7.98)[1])

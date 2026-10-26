@@ -118,7 +118,8 @@ def kept_ranges(blocks: list[Block], plan: Plan, durations: list[float], edit: d
                 if cur:
                     prev = src_blocks[i - 1] if i > 0 else None
                     if v and prev is not None and not is_dropped(prev) and b.start - prev.end < 1.0:
-                        cur.end = min(cur.end, max(v.cut_between(prev.end, b.start)[0], cur.start + 0.1))
+                        cur.end = min(cur.end, max(v.cut_between(prev.end, b.start, **KEPT_THEN_CUT)[0],
+                                                   cur.start + 0.1))
                     else:
                         cur.end = min(cur.end, max(onset(b.start), cur_spoken_end))
                     ranges.append(cur)
@@ -163,7 +164,7 @@ def kept_ranges(blocks: list[Block], plan: Plan, durations: list[float], edit: d
                     if v and nxt.start - p_end < 1.0:
                         # The next words are cut: stop in the quiet moment before them. (The
                         # voice can run straight on, so where it "stops" may be inside them.)
-                        cut = max(v.cut_between(p_end, nxt.start)[0], p_start + 0.1)
+                        cut = max(v.cut_between(p_end, nxt.start, **KEPT_THEN_CUT)[0], p_start + 0.1)
                         e = min(e, cut)
                         real_end = min(real_end, cut)
                     else:
@@ -185,6 +186,13 @@ def kept_ranges(blocks: list[Block], plan: Plan, durations: list[float], edit: d
         if cur:
             ranges.append(cur)
     return [r for r in ranges if r.end - r.start > 0.05]
+
+
+# Stopping before words that are cut: Whisper often marks the cut words as starting a little
+# before the kept sentence really ends ("...without th|em" with "so" timed on top of "them"),
+# so look a bit past its boundary for the real pause, and don't mistake a dip inside a word
+# for one. (Episode 3 cut "ridiculous without them" to "without th".)
+KEPT_THEN_CUT = {"after": 0.35, "min_gap": 0.1}
 
 
 def _split_on_silence(pieces: list[tuple[float, float]], v, onset, speech_end, max_pause: float
