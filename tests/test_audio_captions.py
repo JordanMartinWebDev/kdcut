@@ -54,27 +54,37 @@ class CaptionTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
 class StemTests(unittest.TestCase):
-    def test_game_bangs_stay_under_the_voice(self):
-        """Episode 2's first game track: -47 LUFS with peaks at -17 dB. It used to get +16 dB, so
-        the loudest game sounds hit -1 dB, as loud as the voice's peaks."""
+    def test_game_ducks_under_the_voice(self):
+        """Elytra wind in Episode 3 sat only ~11 dB under the voice while he talked. Game audio
+        now dips while the mic hears him and comes back up in the gaps, and loud moments are
+        compressed with a safety limiter on top."""
         import subprocess
         from kdcut import audioprep, media
         d = Path(tempfile.mkdtemp())
         try:
             rec = d / "rec.mkv"
-            # Quiet game ambience with one loud bang at 3 s.
             subprocess.run(["ffmpeg", "-v", "error", "-y",
-                            "-f", "lavfi", "-i", "sine=frequency=440:duration=6",
+                            # voice: talking from 0.5 to 3 s, silent after
+                            "-f", "lavfi", "-i", "aevalsrc='if(between(t,0.5,3),0.3*sin(2*PI*220*t),0)':d=8",
+                            # game: steady wind-like noise the whole time, one bang at 6 s
                             "-f", "lavfi", "-i",
-                            "aevalsrc='0.004*sin(2*PI*200*t)+if(between(t,3,3.2),0.14*sin(2*PI*90*t),0)':d=6",
+                            "aevalsrc='0.02*sin(2*PI*700*t)*sin(2*PI*3*t)+if(between(t,6,6.2),0.5*sin(2*PI*90*t),0)':d=8",
                             "-map", "0:a", "-map", "1:a", "-c:a", "aac", "-b:a", "256k", str(rec)], check=True)
             info = media.probe(rec)
             with mock.patch.object(audioprep, "LOUDNESS_CACHE", d / "loud.json"):
                 stems = audioprep.split_tracks(rec, info, 0, d / "audio", log=lambda *_: None)
             game = next(s for s in stems if s.kind == "game")
-            self.assertLessEqual(game.gain_db, 14.0)
+            self.assertEqual(game.path.suffix, ".wav")
+
+            def level(a, b):
+                out = subprocess.run(["ffmpeg", "-v", "info", "-ss", str(a), "-t", str(b - a), "-i", str(game.path),
+                                      "-af", "astats=measure_perchannel=none", "-f", "null", "-"],
+                                     capture_output=True, text=True).stderr
+                return float(out.split("RMS level dB:")[1].split()[0])
+            talking, quiet = level(1.2, 2.6), level(4.2, 5.6)
+            self.assertGreater(quiet - talking, 6.0)                       # ducked while he talks
             _, peak = audioprep.measure(game.path)
-            self.assertLess(peak, audioprep.GAME_CEILING + 1.5)      # true peak can sit a hair over
+            self.assertLess(peak, audioprep.GAME_CEILING + 1.5)            # the bang is held down
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
