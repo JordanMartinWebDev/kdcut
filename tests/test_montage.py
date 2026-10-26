@@ -377,6 +377,8 @@ if __name__ == "__main__":
 
 class FakeAI:
     def __call__(self, cfg, system, user, tool_name, desc, schema):
+        if tool_name == "place_timelapses":
+            return {"placements": [{"file": "House.mp4", "after": "B0001", "reason": "the house going up"}]}
         if tool_name == "submit_outline":
             return {"summary": "Builds a house.", "beats": []}
         if tool_name == "submit_edit":
@@ -417,13 +419,27 @@ class MontageEndToEnd(unittest.TestCase):
         info = media.probe(rec)
         key = transcribe._cache_key(rec, media.pick_mic_track(info, "auto"), cfg["whisper"]["model"])
         transcribe.save_cache(out / ".work" / "rec.words.json", key, words)
+        # A timelapse of the same build, played right after the montage.
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=30:duration=6",
+                        "-c:v", "libx264", "-preset", "ultrafast", str(cls.tmp / "House.mp4")], check=True)
         cls.res = run(proj, cfg, use_ai=True, caller=FakeAI(), recordings=[rec], broll_files=[], out_dir=out,
-                      video={"title": "Ep", "cold_open": False, "end_screen": False})
+                      video={"title": "Ep", "cold_open": False, "end_screen": False},
+                      timelapse_files=[cls.tmp / "House.mp4"])
         cls.xml = ET.parse(cls.res["timeline"])
 
     @classmethod
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_song_carries_on_under_the_timelapse_after_it(self):
+        spine = list(next(self.xml.iter("spine")))
+        names = [c.get("name") for c in spine]
+        i = next(k for k, n in enumerate(names) if n.startswith("Montage - "))
+        self.assertTrue(names[i + 1].startswith("Timelapse - House"))
+        carry = [c for c in self.xml.iter() if (c.get("name") or "").startswith("Montage song continues")]
+        self.assertEqual(len(carry), 1)
+        review = self.res["review"].read_text(encoding="utf-8")
+        self.assertIn("carries on from the montage under House.mp4", review)
 
     def test_montage_between_the_lines_with_its_own_music(self):
         spine = list(next(self.xml.iter("spine")))
