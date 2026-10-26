@@ -442,12 +442,14 @@ class SettingsDialog(QDialog):
         mrow.addWidget(label("Volume", "hint", wrap=False))
         mrow.addWidget(self.music_vol)
         self.music_vibe = QComboBox()
-        for text, value in [("Upbeat (happy, adventurous)", "upbeat"), ("Chill (laid back is fine)", "chill"),
-                            ("Anything that fits", "any")]:
+        for text, value in [("Let the AI choose (most entertaining)", "open"),
+                            ("Upbeat only (happy, adventurous)", "upbeat"), ("Chill (laid back is fine)", "chill"),
+                            ("Anything but sad", "any")]:
             self.music_vibe.addItem(text, value)
-        self.music_vibe.setToolTip("The channel's sound. Sad songs are never picked; scary and heavy ones only "
-                                   "for dangerous moments. Upbeat also skips low-energy songs.")
-        self.music_vibe.setCurrentIndex(max(self.music_vibe.findData(str(cfg["music"].get("vibe", "upbeat"))), 0))
+        self.music_vibe.setToolTip("Let the AI choose: the whole library, picked for whatever makes the video most "
+                                   "entertaining. The other choices narrow it: no sad songs, scary and heavy ones "
+                                   "only for dangerous moments, and Upbeat also skips low-energy songs.")
+        self.music_vibe.setCurrentIndex(max(self.music_vibe.findData(str(cfg["music"].get("vibe", "open"))), 0))
         mrow.addWidget(label("Feel", "hint", wrap=False))
         mrow.addWidget(self.music_vibe)
         self.music_duck = QCheckBox("Lower the music while I talk")

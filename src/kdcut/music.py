@@ -61,6 +61,8 @@ SCARY = {"dark", "mysterious", "weird", "eerie", "horror", "suspense", "scary", 
          "thriller", "sinister", "ominous", "drone", "heavy", "ponderous", "angry", "aggressive"}
 SPECIAL_BEATS = {"danger", "setback"}       # outline beats where the special list may play
 VIBES = {
+    # "open" (the default): the whole library, and the AI picks whatever makes the video most
+    # entertaining. The others narrow what it may pick from.
     "upbeat": {2, 3},      # happy / adventurous / upbeat, medium-high energy (the default)
     "chill": {1, 2, 3},    # laid back is fine, still nothing sad
 }
@@ -94,6 +96,8 @@ def energy_level(t: "Track") -> int | None:
 
 def for_vibe(library: list["Track"], vibe: str = "upbeat") -> tuple[list["Track"], list["Track"]]:
     """(tracks offered for the episode, tracks only for genuinely scary moments)."""
+    if vibe == "open":
+        return list(library), []
     if vibe == "any":
         return [t for t in library if feel(t) != "scary"], [t for t in library if feel(t) == "scary"]
     levels = VIBES.get(vibe, VIBES["upbeat"])
@@ -255,8 +259,10 @@ def record_use(paths: list[str], path: Path | None = None) -> None:
         pass
 
 
-def library_text(tracks: list[Track], history: dict[str, float], limit: int = 150) -> str:
-    """What the AI sees: one line per track, recently used ones marked."""
+def library_text(tracks: list[Track], history: dict[str, float], limit: int = 150,
+                 show_feel: bool = False) -> str:
+    """What the AI sees: one line per track, recently used ones marked. `show_feel` adds the
+    track's overall feel (bright / scary / somber) so the AI isn't fooled by one friendly tag."""
     week = time.time() - 7 * 86400
     lines = []
     for t in sorted(tracks, key=lambda x: not tagged(x))[:limit]:     # untagged last
@@ -269,6 +275,8 @@ def library_text(tracks: list[Track], history: dict[str, float], limit: int = 15
             about.append(t.genre)
         if t.bpm:
             about.append(f"{t.bpm} bpm")
+        if show_feel and tagged(t):
+            about.append(f"feel: {feel(t)}")
         desc = f" [{'; '.join(about)}]" if about else " [no mood tags]"
         recent = " (used recently)" if history.get(t.path, 0) > week else ""
         lines.append(f"- {t.name}{desc} {int(t.duration // 60)}:{int(t.duration % 60):02d}{recent}")
@@ -446,6 +454,26 @@ SCHEMA_PART = {
         "why": {"type": "string"},
     }, "required": ["at", "track"]},
 }
+
+OPEN_RULES = (
+    "Pick background music from the creator's library to make this the most entertaining video "
+    "it can be. You have the whole library: choose what serves each moment best, and keep the "
+    "viewer hooked. Read each track's mood, energy, genre and tempo, and its overall feel "
+    "(bright, scary or somber): don't pick a track for one friendly tag when its feel says "
+    "otherwise. Big moments can take big music, a funny bit can take something playful or "
+    "ironic, a real loss or an emotional beat can take something emotional, real danger can "
+    "take something tense; everyday building, exploring and chatting should feel good to watch. "
+    "Keep transitions smooth: no jarring jump in energy between neighbouring sections unless the "
+    "story makes the jump. Tracks marked [no mood tags] are unknown, so use them only when "
+    "nothing tagged fits. "
+    "Music follows the story: start a new song where the work starts, at each line marked "
+    "[BUILD CUE] ('let's build this thing', 'cue the music') and where a timelapse plays, and "
+    "when a new build or goal begins. Otherwise change music when the mood changes, usually at "
+    "chapter boundaries, and let each song play at least a couple of minutes. The first cue must "
+    "be at the first block, so music plays from the start; don't change it again in the first "
+    "minute. Leave music out where silence is stronger (a scary moment, a big reveal, an "
+    "emotional beat). Avoid tracks marked (used recently) so episodes don't all sound the same."
+)
 
 RULES = (
     "Pick background music from the creator's library. This channel's sound is happy, adventurous "

@@ -388,7 +388,7 @@ class EndToEnd(unittest.TestCase):
         self.assertTrue(-38 < lufs < -20, lufs)          # audible under a -16 LUFS voice
         self.assertIn("Music  Bright Fields - Happy Fish", self.review)
         prompt = next(c[1] for c in self.ai.calls if c[0] == "submit_metadata")
-        self.assertIn("Lazy Sunday - Ava Low [Happy]", prompt)
+        self.assertIn("Lazy Sunday - Ava Low [Happy; feel: bright]", prompt)
         self.assertNotIn("Sting", prompt)
         self.assertGreaterEqual(self.result["placed"]["music"], 1)
 

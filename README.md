@@ -187,6 +187,13 @@ the cold open. Epidemic files carry their mood, energy, genre and tempo inside t
 reads those, so the AI knows "Peaceful, low energy" from "Dark, suspense". For music from elsewhere,
 mood subfolders (`Calm`, `Tense`, `Upbeat`, `Funny`) do the same job.
 
+**Feel** (Settings → Music) decides what the AI may pick from. **Let the AI choose** (the default)
+offers the whole library and asks for whatever makes the video most entertaining; each track is
+labelled bright, scary or somber so one friendly tag can't fool it. **Upbeat only**, **Chill** and
+**Anything but sad** narrow the choice: no sad songs, scary and heavy tracks only where the story
+is dangerous, and Upbeat also skips low-energy songs. Beat-cut montages and Shorts always use
+bright songs, since no AI picks those.
+
 Sound effects can live in the same folder. Anything credited to "SFX Producer", anything under 20
 seconds, and ambiences with no mood or tempo are kept out of the music and added to the sound-effect
 choices instead. Duplicate downloads (`Song (1).mp3`) are only used once.

@@ -37,6 +37,22 @@ class FeelTests(unittest.TestCase):
         offered, _ = music.for_vibe([GOOD_FATHER, CHILL, ELDERS, HAPPY], "chill")
         self.assertEqual({t.title for t in offered}, {"Easy Afternoon", "A Little Bit of This"})
 
+    def test_open_offers_the_whole_library_with_each_feel_shown(self):
+        lib = [GOOD_FATHER, HAPPY, SKY, ELDERS, SEA, SHE, CHILL, UNKNOWN]
+        offered, special = music.for_vibe(lib, "open")
+        self.assertEqual(offered, lib)
+        self.assertEqual(special, [])                 # nothing held back, so nothing swapped later
+        text = music.library_text(offered, {}, show_feel=True)
+        self.assertIn("feel: somber", text)            # the gospel track can't pass as cheerful
+        self.assertIn("feel: bright", text)
+        self.assertNotIn("feel:", music.library_text(offered, {}))
+        self.assertIn("most entertaining", music.OPEN_RULES)
+        self.assertNotIn("never somber", music.OPEN_RULES)
+
+    def test_open_is_the_default(self):
+        from kdcut import config
+        self.assertEqual(config.DEFAULTS["music"]["vibe"], "open")
+
     def test_untagged_marked_and_listed_last(self):
         text = music.library_text([UNKNOWN, HAPPY], {})
         lines = text.splitlines()
