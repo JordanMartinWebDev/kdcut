@@ -368,7 +368,8 @@ def font_family(path: Path | None) -> str:
 
 
 def pick_track(library: list, total: float, seed: str, history: dict | None = None):
-    """An upbeat track long enough for the Short, not used in the last week if possible."""
+    """A lively track long enough for the Short, not used in the last week if possible.
+    No AI here, so it stays with bright, energetic music: a build reveal wants a lift."""
     from kdcut import music
     offered, _ = music.for_vibe(library, "upbeat")
     if not offered:

@@ -101,7 +101,7 @@ COLD_OPEN_RULES = (
 
 def generate(cfg: dict, video: dict, kept: list[Block], caller=llm.call_tool,
              cold_open: bool = False, notes: dict[str, list[str]] | None = None,
-             music_library: str = "") -> Metadata:
+             music_library: str = "", music_rules: str = "") -> Metadata:
     lines = []
     for b in kept:
         lines.append(f"{b.id}{' [HIGHLIGHT]' if 'highlight' in b.flags else ''}"
@@ -124,7 +124,7 @@ def generate(cfg: dict, video: dict, kept: list[Block], caller=llm.call_tool,
     schema = SCHEMA
     if music_library:
         from kdcut import music
-        user += music.RULES + "\nMusic library:\n" + music_library + "\n"
+        user += (music_rules or music.RULES) + "\nMusic library:\n" + music_library + "\n"
         schema = {**SCHEMA, "properties": {**SCHEMA["properties"], "music": music.SCHEMA_PART}}
     user += "Final edit transcript:\n" + "\n".join(lines)
     res = caller(cfg, system, user, "submit_metadata", "Submit the YouTube packaging.", schema)

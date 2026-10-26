@@ -375,11 +375,13 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             notes = {**notes, after: list(notes.get(after, [])) + [f"[TIMELAPSE plays here: {t.name}, {t.duration:.0f}s]"]}
     want_cold_open = bool(video.get("cold_open", ed.get("cold_open", True)))
     history = music.load_history()
-    # The channel's music feel decides what the AI may pick from: nothing sad ever, and in the
-    # default "upbeat" feel nothing low-energy either. Scary tracks only for scary moments.
-    vibe = str(mcfg.get("vibe", "upbeat"))
+    # The music feel decides what the AI may pick from. "open" (the default): the whole library,
+    # and the AI picks what makes the video most entertaining. "upbeat"/"chill" leave out sad
+    # songs (upbeat also low-energy ones) and keep scary tracks for scary moments.
+    vibe = str(mcfg.get("vibe", "open"))
     offered, scary = music.for_vibe(library, vibe)
-    library_text = music.library_text(offered, history) if offered else ""
+    library_text = music.library_text(offered, history, show_feel=vibe == "open") if offered else ""
+    music_rules = music.OPEN_RULES if vibe == "open" else music.RULES
     if scary and library_text:
         library_text += ("\n\nScary or big moments only (the deep dark, being hunted, very low health, "
                          "big fights and chases):\n"
@@ -402,7 +404,8 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             r.log("Writing titles and description" + (", picking a cold open" if want_cold_open else ""))
             try:
                 md = metadata.generate(cfg, video, [by_id[i] for i in kept_ids], caller=call,
-                                       cold_open=want_cold_open, notes=notes, music_library=library_text)
+                                       cold_open=want_cold_open, notes=notes, music_library=library_text,
+                                       music_rules=music_rules)
                 md_file.write_text(json.dumps({**md.__dict__, "_cold_open_requested": want_cold_open,
                                                "_music_requested": bool(library),
                                                "_rules": metadata.RULES_VERSION, "_vibe": vibe},
@@ -484,7 +487,9 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             span = (s0, s1)
             r.check()
             res = None
-            song = montage_mod.pick_song(offered, history, seed=len(blocks) + n, used=montage_songs)
+            # Montages are picked without the AI, by beat: keep them to bright songs.
+            bright = [t for t in offered if music.feel(t) == "bright"] or offered
+            song = montage_mod.pick_song(bright, history, seed=len(blocks) + n, used=montage_songs)
             if song is not None:
                 try:
                     sig = signals_mod.measure(Path(rec_path), info, cfg["whisper"].get("mic_track", "auto"),

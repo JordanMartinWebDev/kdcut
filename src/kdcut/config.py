@@ -65,7 +65,7 @@ DEFAULTS: dict[str, Any] = {
         "folders": [],             # your licensed music (e.g. Epidemic Sound downloads)
         "volume_db": -20,          # background level; voice stays on top
         "duck": True,              # dip the music while you talk
-        "vibe": "upbeat",          # upbeat: happy/adventurous, medium-high energy | chill | any
+        "vibe": "open",            # open: whole library, the AI picks what entertains most | upbeat | chill | any
     },
     # Vertical Shorts: build timelapse + glamor shots + voiceover -> finished 1080x1920 MP4.
     "shorts": {
