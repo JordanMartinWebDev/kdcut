@@ -25,8 +25,11 @@ from kdcut.config import HOME_DIR
 
 VOICE_LUFS = -16.0
 GAME_LUFS = -30.0
-GAME_CEILING = -12.0      # loudest a game sound may get (dBFS): explosions, lava and doors stay
-                          # well under your voice, which peaks near -1
+GAME_CEILING = -6.0       # safety limiter on game audio (dBFS); compression does the real work
+GAME_DUCK_DB = 6.0        # game audio dips this much while you talk (like the music bed)
+# Gentle compression for game audio: Minecraft is mostly quiet with loud moments (explosions,
+# lava, elytra wind), so the loud parts come down and the rest stays natural.
+GAME_COMPRESSOR = "acompressor=threshold=-20dB:ratio=2:attack=10:release=250:knee=6"
 SFX_LUFS = -20.0
 LOUDNESS_CACHE = HOME_DIR / "loudness.json"
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -131,8 +134,22 @@ class Stem:
     gain_db: float
 
 
-def split_tracks(rec: Path, info: media.MediaInfo, mic: int, dest_dir: Path, log=print) -> list[Stem]:
-    """Write each audio track of `rec` to its own levelled .m4a. Re-uses earlier results."""
+def _duck_envelope(voice, duration: float, duck_db: float, dest: Path) -> Path | None:
+    """A gain curve that dips the game `duck_db` while you talk (from the mic's voice levels),
+    easing down just before you start and back up after: the same shape as the music bed."""
+    from kdcut import ducking
+    speech = voice.runs(0.0, duration, 0.5) if voice.levels else []
+    if not speech:
+        return None
+    gains = ducking.envelope(speech, duration + 1.0, talk_db=-duck_db, gap_db=0.0)
+    ducking._write_env(gains, dest)
+    return dest
+
+
+def split_tracks(rec: Path, info: media.MediaInfo, mic: int, dest_dir: Path, log=print,
+                 duck_db: float = GAME_DUCK_DB) -> list[Stem]:
+    """Write each audio track of `rec` to its own levelled file. Game audio is ducked under the
+    voice on the same recording. Re-uses earlier results."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     st = rec.stat()
     plan: list[tuple[int, str, str, float]] = []
@@ -146,11 +163,20 @@ def split_tracks(rec: Path, info: media.MediaInfo, mic: int, dest_dir: Path, log
                 plan.append((a.index, "game", "Game" + (f" {n + 1}" if n else ""), GAME_LUFS))
     stems = []
     limit = 300 + info.duration       # generous; a stuck ffmpeg must not hang the whole build
+    voice = None
+    if len(info.audio) > 1 and duck_db > 0:
+        from kdcut import vad
+        try:
+            voice = vad.analyse(rec, mic, dest_dir.parent, log=log)   # shared with the cut points
+        except Exception:
+            voice = None
     for stream, kind, label, target in plan:
         base = f"{rec.stem}.a{stream + 1}.{kind}"
         meta = dest_dir / f"{base}.json"
         sig = {"size": st.st_size, "mtime": int(st.st_mtime), "stream": stream, "target": target,
-               "v": 3 if kind == "game" else 2}
+               "v": 4 if kind == "game" else 2}
+        if kind == "game":
+            sig["duck"] = duck_db if voice is not None else 0.0
         try:
             old = json.loads(meta.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -164,22 +190,36 @@ def split_tracks(rec: Path, info: media.MediaInfo, mic: int, dest_dir: Path, log
         lufs, peak = measure(rec, stream, timeout=limit, total=info.duration,
                              label=f"Measuring {name} audio", log=log)
         media.debug(f"{name}: {lufs} LUFS, peak {peak}")
+        env_file = None
+        tail = ""
         if kind == "game":
-            # Game tracks are mostly quiet with the odd loud bang, so levelling them to an average
-            # used to boost the bangs by up to 18 dB, right up to full scale. Now the boost is
-            # capped and a limiter holds every game sound under GAME_CEILING.
-            gain = gain_for(lufs, peak, target, hi=14.0, over=GAME_CEILING + 1.0 + 9.0)
-            af = f"volume={gain}dB,alimiter=limit={10 ** (GAME_CEILING / 20):.3f}:level=disabled"
+            # Levelled, gently compressed (loud moments come down), ducked under your voice the
+            # way editors sidechain game audio to the mic, with a safety limiter last.
+            gain = gain_for(lufs, peak, target, hi=14.0, over=6.0)
+            af = f"volume={gain}dB,{GAME_COMPRESSOR}"
+            if voice is not None and duck_db > 0:
+                env_file = _duck_envelope(voice, info.duration, duck_db, dest_dir / f"{base}.duck.wav")
+            tail = f"alimiter=limit={10 ** (GAME_CEILING / 20):.3f}:level=disabled"
         else:
             gain = gain_for(lufs, peak, target, over=12.0)
             af = f"volume={gain}dB,alimiter=limit=0.89:level=disabled"      # catch shouts after the boost
-        src = ["ffmpeg", "-y", "-v", "error", "-i", str(rec), "-map", f"0:a:{stream}", "-vn"]
         # async: OBS tracks can have gaps (e.g. the game paused); fill them with silence so
         # everything after stays in sync.
-        wav = (dest_dir / f"{base}.wav", ["-af", f"aresample=48000:async=1:first_pts=0,{af}",
-                                          "-c:a", "pcm_s16le", "-rf64", "auto"])
-        aac = (dest_dir / f"{base}.m4a", ["-af", f"aresample=48000:async=1:first_pts=0,{af}",
-                                          "-c:a", "aac", "-b:a", "256k"])
+        if env_file is not None:
+            n = f"{info.duration + 1:.3f}"
+            src = ["ffmpeg", "-y", "-v", "error", "-i", str(rec), "-i", str(env_file), "-filter_complex",
+                   f"[0:a:{stream}]aresample=48000:async=1:first_pts=0,{af},"
+                   f"aformat=sample_fmts=fltp:channel_layouts=stereo[g];"
+                   f"[1:a]aresample=48000,pan=stereo|c0=c0|c1=c0,aformat=sample_fmts=fltp,"
+                   f"apad=whole_dur={n}[e];"
+                   f"[g][e]amultiply,{tail}[out]", "-map", "[out]", "-vn"]
+            filt = []
+        else:
+            src = ["ffmpeg", "-y", "-v", "error", "-i", str(rec), "-map", f"0:a:{stream}", "-vn"]
+            chain = af + (f",{tail}" if tail else "")
+            filt = ["-af", f"aresample=48000:async=1:first_pts=0,{chain}"]
+        wav = (dest_dir / f"{base}.wav", filt + ["-c:a", "pcm_s16le", "-rf64", "auto"])
+        aac = (dest_dir / f"{base}.m4a", filt + ["-c:a", "aac", "-b:a", "256k"])
         # Game tracks go silent whenever the game is paused or quiet, and ffmpeg's AAC encoder
         # can freeze on long digital silence (it stalled on 3 of Episode 2's 35 game tracks,
         # costing a minute each before the WAV fallback). WAV never does, so game audio is
