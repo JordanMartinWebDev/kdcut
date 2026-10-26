@@ -1,4 +1,7 @@
+import shutil
+import tempfile
 import unittest
+from unittest import mock
 from fractions import Fraction
 from pathlib import Path
 
@@ -46,6 +49,31 @@ class CaptionTests(unittest.TestCase):
         self.assertEqual(out[1], (2.0, "Castle"))
         self.assertEqual(out[2], (5.5, "Mining"))
         self.assertEqual(out[3], (120.0, "Gone"))
+
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
+class StemTests(unittest.TestCase):
+    def test_game_audio_is_wav_and_voice_is_aac(self):
+        """Game tracks go digitally silent when the game is paused, which can freeze ffmpeg's AAC
+        encoder: they're written as WAV straight away."""
+        import subprocess
+        from kdcut import audioprep, media
+        d = Path(tempfile.mkdtemp())
+        try:
+            rec = d / "rec.mkv"
+            subprocess.run(["ffmpeg", "-v", "error", "-y",
+                            "-f", "lavfi", "-i", "sine=frequency=440:duration=6",
+                            "-f", "lavfi", "-i", "aevalsrc=0:d=6",          # a silent game track
+                            "-map", "0:a", "-map", "1:a", "-c:a", "aac", str(rec)], check=True)
+            info = media.probe(rec)
+            with mock.patch.object(audioprep, "LOUDNESS_CACHE", d / "loud.json"):
+                stems = audioprep.split_tracks(rec, info, 0, d / "audio", log=lambda *_: None)
+            kinds = {s.kind: s.path.suffix for s in stems}
+            self.assertEqual(kinds["voice"], ".m4a")
+            self.assertEqual(kinds.get("game"), ".wav")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == "__main__":
