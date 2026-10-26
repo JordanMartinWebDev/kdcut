@@ -44,9 +44,17 @@ story outline (goals, beats, setups and their payoffs), so every cut is checked 
 story. KDcut also measures the footage itself, for free: how animated your voice is, how much
 the picture moves, how long inventory or chest screens are open, and sudden loud game sounds.
 The AI uses those numbers for stretches the story doesn't decide. Lively wordless moments stay
-in real time, menus and AFK time are cut, and long stretches of slow progress (walking
-somewhere, strip mining, building) are **fast-forwarded** with a small `▶▶ 8x` badge instead
-of cut. The outline is saved as `story.json` next to the timeline.
+in real time and menus and AFK time are cut. Quiet hands-on work (building, mining, digging,
+clearing land, farming) becomes a **montage**: cut to the beat of a song, a cut on every beat and
+half beat however fast the song is, with the block sounds landing on the beat. When the block
+sounds are too faint to line up, it still cuts on the beat. Up to 4 per video (`max_montages`);
+a hands-on stretch the AI marked as a fast-forward is turned into a montage while there's room.
+Travel and waiting are **fast-forwarded** with a small `▶▶ 8x` badge instead of cut. The
+outline is saved as `story.json` next to the timeline.
+
+Cuts are tight to your voice: each piece starts 0.1 s before you start talking and ends 0.2 s
+after you stop, measured on the mic track (Whisper's word times are often a few tenths early or
+late), and any silence over 0.45 s is cut out, even mid-sentence.
 
 5. Click **Edit my video**. When it finishes, click **How to open in Resolve**, then import the
    `.fcpxml` with **File > Import > Timeline**.
@@ -417,8 +425,10 @@ Defaults live in `src/kdcut/config.py`. Override them in `~/.kdcut/config.toml` 
 style_notes = "Keep the jokes and the chat interaction. Cut inventory sorting. Don't cut deaths."
 
 [edit]
-keep_pauses_up_to = 0.6   # longer pauses (thinking of what to say next) are cut
-pad_after = 0.3           # breathing room after each sentence
+keep_pauses_up_to = 0.45  # silences longer than this (voice to voice) are cut
+pad_before = 0.1          # kept before you start talking
+pad_after = 0.2           # breathing room after you stop
+max_montages = 4          # building/mining cut to the beat; travel stays a fast-forward
 
 [whisper]
 mic_track = 2

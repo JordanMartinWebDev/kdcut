@@ -35,15 +35,15 @@ DEFAULTS: dict[str, Any] = {
         "mic_track": "auto",
     },
     "edit": {
-        "pad_before": 0.15,        # seconds kept before each spoken block
-        "pad_after": 0.3,          # seconds kept after each spoken block
-        "keep_pauses_up_to": 0.6,  # thinking pauses longer than this are cut (snappy jump cuts)
+        "pad_before": 0.1,         # seconds kept before the voice starts
+        "pad_after": 0.2,          # seconds kept after the voice stops
+        "keep_pauses_up_to": 0.45, # silences longer than this (voice to voice) are cut: snappy jump cuts
         "block_gap": 0.8,          # silence that splits speech into blocks
         "max_block_seconds": 20.0,
         "cold_open": True,         # start with a short teaser of the best moment
         "speedup_badge": True,
         "montages": True,          # cut hands-on stretches (building, mining) to the beat of a song
-        "max_montages": 2,
+        "max_montages": 4,         # hands-on stretches (building, mining) cut to the beat; travel stays fast
         "montage_seconds": 15,
         "montage_punch": 0.06,     # zoom punch on each beat cut that eases back (0 = off)
         "minecraft_assets": "",    # Minecraft's assets folder; found automatically for the usual launchers     # small fast-forward badge on sped-up stretches

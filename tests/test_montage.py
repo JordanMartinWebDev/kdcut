@@ -203,12 +203,25 @@ class DetectionTests(unittest.TestCase):
         for a, b in zip(plan.segments, plan.segments[1:]):
             self.assertGreaterEqual(b.src + 1e-6, a.src + a.dur * a.speed)
 
-    def test_fast_songs_cut_less_often(self):
-        hits = self.run_of()
-        plan = self.m.lay_out(hits, Path("s.wav"), "S", 60 / 170, 0.1, 120.0)
-        self.assertGreaterEqual(min(g.dur for g in plan.segments), 0.2 - 1e-9)   # never strobing
+    def test_fast_songs_still_cut_on_every_beat(self):
+        hits = [(10.0 + i * 0.12, 0.9) for i in range(400)]       # plenty of digging
+        period = 60 / 170
+        plan = self.m.lay_out(hits, Path("s.wav"), "S", period, 0.1, 120.0)
+        self.assertAlmostEqual(min(g.dur for g in plan.segments if g.hit), period / 2, places=6)  # half beats
+        self.assertAlmostEqual(max(g.dur for g in plan.segments if g.hit), period, places=6)     # never 2 beats
+        for b in plan.beats:                                      # every cut on the song's own grid
+            k = (b - self.m.PRE) / (period / 2)
+            self.assertAlmostEqual(k, round(k), places=6)
         plan = self.m.lay_out(hits, Path("s.wav"), "S", 60 / 100, 0.1, 120.0)
         self.assertAlmostEqual(min(g.dur for g in plan.segments), 0.3, places=6)
+
+    def test_steady_points_skip_menus(self):
+        pts = self.m.steady_points(100.0, 110.0, [(103.0, 105.0)])
+        times = [t for t, _ in pts]
+        self.assertTrue(all(not 103.0 <= t <= 105.0 for t in times))
+        self.assertAlmostEqual(times[1] - times[0], self.m.STEADY, places=6)
+        plan = self.m.lay_out(pts, Path("s.wav"), "S", 0.5, 0.1, 120.0, target=6.0)
+        self.assertIsNotNone(plan)                               # enough to cut on the beat
 
 
 @unittest.skipUnless(HAVE, "needs ffmpeg and numpy")
@@ -240,19 +253,36 @@ class RenderTests(unittest.TestCase):
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
-    def test_too_few_hits_returns_none(self):
+    def test_too_few_hits_still_makes_a_beat_cut_montage(self):
         from kdcut import montage
         d = Path(tempfile.mkdtemp())
         try:
             game(d / "game.wav", [5.0, 9.0, 14.0], seconds=20)
             song(d / "song.wav", seconds=30)
+
+            def video(name, wav, seconds):
+                out = d / name
+                subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                                f"testsrc2=size=320x180:rate=30:duration={seconds}", "-i", str(wav),
+                                "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-preset", "ultrafast",
+                                "-g", "30", "-c:a", "aac", "-shortest", str(out)], check=True)
+                return out
             track = music.Track(path=str(d / "song.wav"), title="S", artist="T", tags=[], duration=30.0, bpm="120")
-            self.assertIsNone(montage.make(d / "game.wav", 0, 0.0, 20.0, track, Fraction(30), 320, 180,
-                                           d / "m.mp4", -6.0, matcher=matcher_for(d), log=lambda *_: None))
-            # Without Minecraft's sound files there's no telling blocks from eating: no montage.
+            res = montage.make(video("rec.mkv", d / "game.wav", 20), 0, 0.0, 20.0, track, Fraction(30), 320, 180,
+                               d / "m.mp4", -6.0, matcher=matcher_for(d), log=lambda *_: None)
+            self.assertIsNotNone(res)                            # a montage, not a fast-forward
+            self.assertFalse(res.plan.sounds)
+            self.assertIn("beat cuts only", res.note)
+            # Without Minecraft's sound files there's no telling blocks from eating: still cut on the beat.
             game(d / "busy.wav", list(np.arange(1, 19, 0.6)), seconds=20)
-            self.assertIsNone(montage.make(d / "busy.wav", 0, 0.0, 20.0, track, Fraction(30), 320, 180,
-                                           d / "m.mp4", -6.0, matcher=None, log=lambda *_: None))
+            res = montage.make(video("busy.mkv", d / "busy.wav", 20), 0, 0.0, 20.0, track, Fraction(30), 320, 180,
+                               d / "m2.mp4", -6.0, matcher=None, log=lambda *_: None)
+            self.assertIsNotNone(res)
+            self.assertFalse(res.plan.sounds)
+            # Too short to fill two bars: then it really can't be a montage.
+            game(d / "tiny.wav", [0.5], seconds=2)
+            self.assertIsNone(montage.make(video("tiny.mkv", d / "tiny.wav", 2), 0, 0.0, 2.0, track, Fraction(30), 320, 180,
+                                           d / "m3.mp4", -6.0, matcher=None, log=lambda *_: None))
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
@@ -266,18 +296,39 @@ class MixTests(unittest.TestCase):
         self.assertGreater(g[25 * r], 0.2)
         self.assertTrue(0 < g[int(9.8 * r)] < g[5 * r])            # a short fade, not a hard cut
 
-    def test_planner_takes_at_most_two(self):
+    def test_planner_takes_up_to_the_limit(self):
         from kdcut.blocks import Block
         bl = [Block(f"B{i}", 0, i * 100.0, i * 100.0 + 5, "building time.") for i in range(1, 6)]
 
         def fake(cfg, system, user, tool, desc, schema):
             self.assertIn("montage", schema["properties"])
             return {"drop": [], "chapters": [{"at": "B1", "title": "Intro"}],
-                    "montage": [{"id": f"B{i}", "seconds": 90, "reason": "building"} for i in range(1, 5)]}
+                    "montage": [{"id": f"B{i}", "seconds": 90, "reason": "building"} for i in range(1, 6)]}
         plan = planner.make_plan(bl, [Path("r.mkv")], config.DEFAULTS, {}, [], {}, caller=fake,
                                  log=lambda *_: None, quiet_seconds={f"B{i}": 95.0 for i in range(1, 6)})
-        self.assertEqual(len(plan.montage), 2)
+        self.assertEqual(len(plan.montage), 4)
         self.assertEqual(plan.montage[0]["seconds"], 90.0)
+        two = config._merge(config.DEFAULTS, {"edit": {"max_montages": 2}})
+        plan = planner.make_plan(bl, [Path("r.mkv")], two, {}, [], {}, caller=fake,
+                                 log=lambda *_: None, quiet_seconds={f"B{i}": 95.0 for i in range(1, 6)})
+        self.assertEqual(len(plan.montage), 2)
+
+    def test_hands_on_fast_forwards_become_montages(self):
+        # Episode 2's real plan: the editor picked fast-forwards for everything quiet.
+        plan = planner.Plan(montage=[{"id": "B0023", "seconds": 78.0, "reason": "mining diamonds in caves"}],
+                            fast=[{"id": "B0012", "seconds": 40.7, "speed": 6.0, "reason": "ride back home"},
+                                  {"id": "B0042", "seconds": 120.0, "speed": 8.0, "reason": "mining through the nether"},
+                                  {"id": "B0130", "seconds": 60.0, "speed": 6.0, "reason": "fortress corridors"},
+                                  {"id": "B0153", "seconds": 30.0, "speed": 5.0, "reason": "walking warped forest"},
+                                  {"id": "B0155", "seconds": 90.0, "speed": 6.0, "reason": "hunting endermen"},
+                                  {"id": "B0170", "seconds": 45.0, "speed": 6.0, "reason": "building the bone meal farm"},
+                                  {"id": "B0180", "seconds": 12.0, "speed": 6.0, "reason": "placing a few blocks"}])
+        notes = planner.promote_montages(plan, config.DEFAULTS)
+        self.assertEqual([m["id"] for m in plan.montage], ["B0023", "B0042", "B0170"])
+        self.assertEqual(len(notes), 2)
+        self.assertEqual({f["id"] for f in plan.fast}, {"B0012", "B0130", "B0153", "B0155", "B0180"})
+        off = config._merge(config.DEFAULTS, {"edit": {"montages": False}})
+        self.assertEqual(planner.promote_montages(planner.Plan(fast=[{"id": "B1", "seconds": 60, "reason": "mining"}]), off), [])
 
 
 if __name__ == "__main__":

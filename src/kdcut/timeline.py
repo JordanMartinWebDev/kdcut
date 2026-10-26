@@ -141,6 +141,8 @@ def kept_ranges(blocks: list[Block], plan: Plan, durations: list[float], edit: d
                     pieces.append((at, a))
                     at = z
             pieces.append((at, b.end))
+            if v:
+                pieces = _split_on_silence(pieces, v, onset, speech_end, max_pause)
             for k, (p_start, p_end) in enumerate(pieces):
                 last = k == len(pieces) - 1
                 if v and p_end - p_start < 1.5 and v.voiced(p_start - 0.1, p_end + 0.1) < 0.1:
@@ -168,7 +170,10 @@ def kept_ranges(blocks: list[Block], plan: Plan, durations: list[float], edit: d
                         e = min(e, max(onset(nxt.start), real_end))
                 e = min(e, limit)
                 ends_here = cur is not None and cur.block_ids[-1] in break_after and cur.block_ids[-1] != b.id
-                if cur and s - cur.end <= max_pause and not ends_here:
+                # Keep the pause only when the real silence (voice to voice, not the padded
+                # edges) is short; padding never turns a long pause into a kept one.
+                short_pause = s <= cur.end or real_start - cur_spoken_end <= max_pause if cur else False
+                if cur and short_pause and not ends_here:
                     cur.end = max(cur.end, e)
                     if b.id not in cur.block_ids:
                         cur.block_ids.append(b.id)
@@ -180,6 +185,26 @@ def kept_ranges(blocks: list[Block], plan: Plan, durations: list[float], edit: d
         if cur:
             ranges.append(cur)
     return [r for r in ranges if r.end - r.start > 0.05]
+
+
+def _split_on_silence(pieces: list[tuple[float, float]], v, onset, speech_end, max_pause: float
+                      ) -> list[tuple[float, float]]:
+    """Split each piece where the mic is silent for longer than `max_pause` (a thinking pause
+    inside a sentence), and start each piece where the voice really starts: Whisper often
+    puts the first word a few tenths of a second early."""
+    out: list[tuple[float, float]] = []
+    for a, z in pieces:
+        lo = v.onset_after(onset(a))
+        hi = max(speech_end(z), lo)
+        runs = v.runs(lo, hi, max_pause) if hi - lo > 0.05 else []
+        if not runs:
+            out.append((a, z))          # a quiet word the mic barely caught: trust Whisper
+            continue
+        if len(runs) == 1:
+            out.append((runs[0][0], max(runs[0][1], min(z, hi))))
+            continue
+        out += [(x, y) for x, y in runs[:-1]] + [(runs[-1][0], max(runs[-1][1], min(z, hi)))]
+    return out
 
 
 class _Lanes:

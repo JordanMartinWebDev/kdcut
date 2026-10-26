@@ -33,7 +33,9 @@ HOP = 128           # ~11.6 ms per onset frame
 WIN = 1024
 PRE = 0.02          # each slice starts this long before its hit: the cut lands right on the beat
 HIT_WINDOW = 0.45   # game audio kept around each hit
-MIN_HITS = 8        # fewer usable hits than this: fall back to a fast-forward
+MIN_HITS = 8        # fewer usable hits than this: cut on the beat without block sounds
+MIN_SLICE = 0.05    # shortest slice (3 frames at 60 fps): every beat gets a cut, however fast
+STEADY = 0.25       # beat-only montages: footage is picked from points this far apart
 
 
 # --------------------------------------------------------------------------------------
@@ -272,6 +274,7 @@ class Plan:
     segments: list[Segment]
     bpm: float
     bars: list[str]
+    sounds: bool = True             # False: cut on the beat only (no block sounds lined up)
 
     @property
     def seconds(self) -> float:
@@ -429,13 +432,11 @@ def lay_out(hits: list[tuple[float, float]], song: Path, song_name: str, period:
             song_len: float, target: float = 15.0, skip_intro: float = 12.0, bar_offset: int = 0,
             starts: list[float] | None = None) -> Plan | None:
     """Fit a montage of about `target` seconds in whole bars of the song, starting on a
-    downbeat. Cuts on the beat, on half beats, speeding up, with fast-forward shots in between;
-    for fast songs a 'beat' is two beats (slices under ~0.2 s strobe). Footage comes from the
-    busiest run of block sounds."""
+    downbeat. Cuts on every beat and half beat, however fast the song (down to a few frames),
+    speeding up, with fast-forward shots in between. Footage comes from the busiest run of
+    block sounds."""
     u = period
-    while u < 0.4:
-        u *= 2
-    half_ok = u / 2 >= 0.2
+    half_ok = u / 2 >= MIN_SLICE
     bar = 4 * u
     times = [t for t, _ in hits]
     most = max(int(round(target / bar)), 2)
@@ -496,7 +497,7 @@ def render(plan: Plan, rec: Path, game_stream: int | None, dest: Path, fps, widt
     frames = cuts[-1] - cuts[0]
     total = frames / float(fps)
     sig = (f"{rec}|{plan.song}|{plan.song_start:.3f}|{[(g.src, g.dur, g.speed, g.audio) for g in segs]}|"
-           f"{game_stream}|{music_db}|{hit_gains}|{fps}|{width}x{height}|{punch}|v11")
+           f"{game_stream}|{music_db}|{hit_gains}|{fps}|{width}x{height}|{punch}|{plan.sounds}|v12")
     dest = dest.with_name(f"{dest.stem}_{hashlib.sha1(sig.encode()).hexdigest()[:10]}.mp4")
     if dest.is_file():
         return dest, frames
@@ -517,7 +518,7 @@ def render(plan: Plan, rec: Path, game_stream: int | None, dest: Path, fps, widt
                        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,trim=end_frame={f},"
                        f"setpts=PTS-STARTPTS{zoom}[v{k}]")
         vlabels.append(f"[v{k}]")
-        if game_stream is not None and g.hit is not None:
+        if game_stream is not None and g.hit is not None and plan.sounds:
             delay = int(round(cuts[k] / float(fps) * 1000))
             gain = next(gains, 0.0)
             fade = min(0.04, g.audio / 3)
@@ -626,14 +627,13 @@ def make(rec: Path, game_stream: int | None, start: float, end: float, song, fps
     breaking or being placed (`matcher`: mcsounds.Matcher). None when there's no matcher or
     the stretch doesn't have enough block sounds (the caller falls back to a fast-forward)."""
     from kdcut import signals
+    menus = menu_spans(sig, signals.MENU_FLAT)
+    hits: list[tuple[float, float]] = []
     if matcher is None:
-        log("Montage skipped: Minecraft's sound files weren't found, so block sounds can't be told apart")
-        return None
-    x = decode(rec, start, end - start, game_stream)
-    hits = block_hits(x, start, end, matcher, menu_spans(sig, signals.MENU_FLAT))
-    if len(hits) < MIN_HITS:
-        log(f"Montage skipped: only {len(hits)} block sounds in that stretch")
-        return None
+        log("Minecraft's sound files weren't found, so this montage cuts on the beat without block sounds")
+    else:
+        x = decode(rec, start, end - start, game_stream)
+        hits = block_hits(x, start, end, matcher, menus)
     song_len = float(getattr(song, "duration", 0) or 0) or media.probe(Path(song.path)).duration
     window = min(song_len, 300.0)
     m = decode(Path(song.path), 0.0, window)
@@ -642,16 +642,38 @@ def make(rec: Path, game_stream: int | None, start: float, end: float, song, fps
     phase = kick_phase(m, period, phase)
     fenv, _ = onset_envelope(m)
     offset = downbeat(fenv, mfps, period, phase)
-    u_beats = 1
-    while period * u_beats < 0.4:
-        u_beats *= 2
-    plan = lay_out(hits, Path(song.path), song.name, period, phase, window, target, bar_offset=offset,
-                   starts=loud_starts(m, period, phase, 4 * u_beats, offset))
+    loud = loud_starts(m, period, phase, 4, offset)
+    plan = None
+    if len(hits) >= MIN_HITS:
+        plan = lay_out(hits, Path(song.path), song.name, period, phase, window, target, bar_offset=offset,
+                       starts=loud)
     if plan is None:
-        log("Montage skipped: the hits are too close together to fill the beats")
+        # Too few clear block sounds (quiet digging, music over the game, no sound files): still
+        # a montage, cut on every beat, with footage spread evenly through the stretch.
+        if matcher is not None:
+            log(f"Only {len(hits)} clear block sounds after {start:.0f}s, so this montage cuts on the beat "
+                "without lining them up")
+        plan = lay_out(steady_points(start, end, menus), Path(song.path), song.name, period, phase, window,
+                       target, bar_offset=offset, starts=loud)
+        if plan is not None:
+            plan.sounds = False
+    if plan is None:
+        log("Montage skipped: the stretch is too short to fill even two bars of the song")
         return None
-    gains = hit_gains(rec, game_stream, plan.hits)
+    gains = hit_gains(rec, game_stream, plan.hits) if plan.sounds else []
     file, frames = render(plan, rec, game_stream, dest, fps, width, height, music_db, gains, log=log, punch=punch)
     ramps = f" and {plan.ramps} fast-forward shots" if plan.ramps else ""
+    how = "" if plan.sounds else ", beat cuts only"
     return Result(file, frames, plan, end - start,
-                  f"{len(plan.hits)} cuts{ramps} on the beat of {song.name} ({plan.bpm:g} BPM)")
+                  f"{len(plan.hits)} cuts{ramps} on the beat of {song.name} ({plan.bpm:g} BPM{how})")
+
+
+def steady_points(start: float, end: float, skip: list[tuple[float, float]] = ()) -> list[tuple[float, float]]:
+    """Evenly spaced points through a stretch, menus left out: footage for a montage that
+    cuts on the beat when there are no block sounds to line up."""
+    out, t = [], start + PRE
+    while t <= end - HIT_WINDOW:
+        if not any(a <= t <= b for a, b in skip):
+            out.append((round(t, 4), 0.0))
+        t += STEADY
+    return out
