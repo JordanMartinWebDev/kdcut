@@ -45,10 +45,10 @@ DEFAULTS: dict[str, Any] = {
         "montages": True,          # cut hands-on stretches (building, mining) to the beat of a song
         "max_montages": 4,         # hands-on stretches (building, mining) cut to the beat
         "montage_min_footage": 30, # seconds of hands-on footage a montage needs; less is just cut
-        "montage_min_seconds": 10, # shortest montage on screen; a 3-second burst of music is no montage
+        "montage_min_seconds": 20, # shortest montage section on screen (with any timelapse after it, same song)
         "max_fast_forwards": 3,    # fast-forwards are seasoning: a few per video, spaced out
         "fast_spacing_blocks": 8,  # no two fast-forwards/montages within this many lines of each other
-        "montage_seconds": 15,
+        "montage_seconds": 22,     # how long a montage aims to be on screen
         "montage_punch": 0.06,     # zoom punch on each beat cut that eases back (0 = off)
         "minecraft_assets": "",    # Minecraft's assets folder; found automatically for the usual launchers     # small fast-forward badge on sped-up stretches
         "timelapse_transition": "dip",   # dip: quick fade through black into and out of a timelapse | cut

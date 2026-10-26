@@ -369,7 +369,8 @@ def system_prompt(cfg: dict, video: dict) -> str:
         f"- Montage: a long quiet stretch of hands-on work (building, mining, digging, clearing "
         f"land, farming; at least {montage_min_footage(cfg):.0f}s of footage) is cut into a montage "
         "to the beat of a song, with the block sounds on the beat. It's a real section of the "
-        f"video, 10-20 s on screen. Up to {max_montages(cfg)} per video, the best stretches first. A "
+        f"video, at least 20 s on screen, using footage from the whole stretch. Up to {max_montages(cfg)} "
+        "per video, the best stretches first. A "
         "shorter bit of work is never a montage: keep a few seconds with an extend or cut it. "
         "Never where the creator talks, never travel.",
         "- Lines starting with [on screen ...] describe what was happening during a stretch "

@@ -46,10 +46,13 @@ the picture moves, how long inventory or chest screens are open, and sudden loud
 The AI uses those numbers for stretches the story doesn't decide. Lively wordless moments stay
 in real time; everything else that's quiet is simply cut, since a jump cut keeps the video
 moving. Longer quiet hands-on work (building, mining, digging, clearing land, farming; at least
-30 s of footage) becomes a **montage**: a real section of 10-20 s cut to the beat of a song, a cut
+30 s of footage) becomes a **montage**: a real section of at least 20 s (aiming for about 22),
+with footage from across the whole stretch, cut to the beat of a song, a cut
 on every beat and half beat however fast the song is, with the block sounds landing on the beat.
 When there are few block sounds it uses a sparser pattern, and if they're too faint to line up
-it still cuts on the beat. A stretch that can't fill 10 s is cut rather than shown as a short
+it still cuts on the beat. A timelapse of the same build played right after it counts toward the
+20 s, and the montage's song keeps playing under it instead of switching to the background
+music. A stretch that can't fill the time is cut rather than shown as a short
 burst. Up to 4 per video (`max_montages`).
 
 **Fast-forwards** (with a small `▶▶ 8x` badge) are seasoning: at most 3 per video

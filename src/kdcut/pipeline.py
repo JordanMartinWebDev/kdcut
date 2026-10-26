@@ -469,6 +469,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     # the stretch hasn't enough clear game sounds, there's no music, or numpy is missing.
     fast_items = list(plan.fast)
     montage_info: dict[int, montage_mod.Result] = {}
+    montage_db: dict[int, float] = {}          # the song's level inside each montage
     montage_songs: set[str] = set()
     matcher = None
     if plan.montage and bool(ed.get("montages", True)):
@@ -491,6 +492,10 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             span = (s0, s1)
             r.check()
             res = None
+            # The section is at least montage_min_seconds on screen. A timelapse played right
+            # after it (same song) counts toward that, so the montage itself can be shorter.
+            follow = sum(t.duration for t in tl_inserts.get(b.id, []))
+            need = max(float(ed.get("montage_min_seconds", 20)) - follow, 8.0)
             # Montages are picked without the AI, by beat: keep them to bright songs.
             bright = [t for t in offered if music.feel(t) == "bright"] or offered
             song = montage_mod.pick_song(bright, history, seed=len(blocks) + n, used=montage_songs)
@@ -504,8 +509,11 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
                                            span[0], span[1], song, fps, width, height,
                                            work / "montage" / f"montage_{b.id}.mp4",
                                            music_db=audioprep.music_gain(Path(song.path)) + max(vol + 16.0, -8.0),
-                                           sig=sig, target=float(ed.get("montage_seconds", 15)),
-                                           min_seconds=float(ed.get("montage_min_seconds", 10)),
+                                           sig=sig, target=max(float(ed.get("montage_seconds", 22)) - follow, 15.0, need),
+                                           min_seconds=need,
+                                           # A timelapse of the same build follows: the song carries
+                                           # on under it, so it mustn't fade out here.
+                                           fade_out=not tl_inserts.get(b.id),
                                            matcher=matcher, log=r.log,
                                            punch=float(ed.get("montage_punch", 0.06) or 0.0))
                 except ImportError:
@@ -520,6 +528,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             clip = Clip(path=res.file, src_in=0, dur=res.frames, rec=0, role="montage",
                         name=f"Montage - {song.title}")
             montage_info[id(clip)] = res
+            montage_db[id(clip)] = audioprep.music_gain(Path(song.path)) + max(vol + 16.0, -8.0)
             insert_clips.setdefault(b.id, []).append(clip)
     done_ids = {bid for bid, clips in insert_clips.items() if any(c.role == "montage" for c in clips)}
     fast_items = [f for f in fast_items if f.get("id") not in done_ids]   # one treatment per stretch
@@ -621,6 +630,37 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         tl.markers.append(Marker(rec=clip.rec, name=f"Montage: {m.plan.song_name}", kind="note"))
         review.append(f"{fmt_ts(tl.seconds(clip.rec))}  Montage: {m.real_seconds:.0f}s of gameplay as {m.note}, "
                       f"{tl.seconds(clip.dur):.0f}s")
+    # Timelapses right after a montage are the same piece of work: the montage's song keeps
+    # playing under them (picking up where the montage left off) instead of switching to the
+    # background music.
+    main = sorted(tl.main, key=lambda c: c.rec)
+    for k, clip in enumerate(main):
+        m = montage_info.get(id(clip))
+        if m is None:
+            continue
+        song, at, prev = Path(m.plan.song), m.plan.song_start + tl.seconds(clip.dur), clip
+        song_len = media.probe(song).duration or 0.0
+        level = montage_db.get(id(clip), -8.0)
+        for nxt in main[k + 1:]:
+            if nxt.role != "timelapse" or nxt.rec != prev.rec_end:
+                break
+            left = song_len - at
+            dur = min(nxt.dur, tl.frames(max(left, 0.0)))
+            if dur <= tl.frames(1.0):
+                break
+            prep = prepared.get(id(nxt))
+            talking = prep is not None and prep.voice_file is not None
+            tl.connected.append(Clip(path=song, src_in=tl.frames(at), dur=dur, rec=nxt.rec,
+                                     lane=lanes.place(music_lane, nxt.rec, dur), enable="audio", role="music",
+                                     name=f"Montage song continues - {m.plan.song_name}",
+                                     volume_db=round(level - (10.0 if talking else 0.0), 1)))
+            montage_spans.append((tl.seconds(nxt.rec), tl.seconds(nxt.rec + dur)))
+            review.append(f"{fmt_ts(tl.seconds(nxt.rec))}  Music  {m.plan.song_name} carries on from the montage "
+                          f"under {prep.item.name if prep else 'the timelapse'}")
+            at += tl.seconds(dur)
+            prev = nxt
+            if dur < nxt.dur:
+                break
     for clip in tl.main:
         f = fast_info.get(id(clip))
         if f is None:
