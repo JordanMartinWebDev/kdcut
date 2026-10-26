@@ -313,6 +313,46 @@ class MixTests(unittest.TestCase):
                                  log=lambda *_: None, quiet_seconds={f"B{i}": 95.0 for i in range(1, 6)})
         self.assertEqual(len(plan.montage), 2)
 
+    def test_episode3_speed_effects_are_thinned_out(self):
+        """Episode 3's real plan: a 30 s 'montage' (it came out 5 s long) and 4 fast-forwards,
+        two of them in the first two minutes and two right next to the montage."""
+        from kdcut.blocks import Block
+        blocks = [Block(f"B{i:04d}", 0, i * 10.0, i * 10.0 + 5, "x") for i in range(1, 200)]
+        plan = planner.Plan(
+            montage=[{"id": "B0080", "seconds": 30.0, "reason": "mining end stone for bridges"},
+                     {"id": "B0146", "seconds": 40.0, "reason": "mining mud"},
+                     {"id": "B0169", "seconds": 120.0, "reason": "building the mob farm"}],
+            fast=[{"id": "B0008", "seconds": 90.0, "speed": 8.0, "reason": "15 minute search for stronghold"},
+                  {"id": "B0012", "seconds": 40.0, "speed": 6.0, "reason": "exploring stronghold corridors"},
+                  {"id": "B0081", "seconds": 40.0, "speed": 6.0, "reason": "walking toward end city"},
+                  {"id": "B0085", "seconds": 40.0, "speed": 6.0, "reason": "walking among chorus trees"}])
+        notes = planner.space_out(plan, blocks, config.DEFAULTS)
+        self.assertEqual(len(plan.montage), 3)                        # montages stay (min length is checked at render)
+        self.assertEqual([f["id"] for f in plan.fast], ["B0008"])     # the 15-minute search he talks about
+        self.assertEqual(len(notes), 3)
+        self.assertTrue(any("B0012" in n and "too close" in n for n in notes))
+        self.assertTrue(any("B0081" in n for n in notes))             # walking right after a montage: cut
+        short = planner.Plan(montage=[{"id": "B0050", "seconds": 20.0, "reason": "placing a few blocks"}])
+        planner.space_out(short, blocks, config.DEFAULTS)
+        self.assertEqual(short.montage, [])                           # 20 s of footage is no montage
+
+    def test_fast_forwards_are_capped(self):
+        from kdcut.blocks import Block
+        blocks = [Block(f"B{i}", 0, i * 10.0, i * 10.0 + 5, "x") for i in range(100)]
+        plan = planner.Plan(fast=[{"id": f"B{i}", "seconds": 20.0 + i, "speed": 6.0, "reason": "walk"}
+                                  for i in range(0, 100, 10)])
+        planner.space_out(plan, blocks, config.DEFAULTS)
+        self.assertEqual([f["id"] for f in plan.fast], ["B70", "B80", "B90"])   # the 3 longest, in order
+
+    def test_montage_is_never_a_blip(self):
+        from kdcut import montage
+        self.m = montage
+        hits = [(10.0 + i * 0.5, 0.9) for i in range(12)]              # 6 s of digging: not enough
+        self.assertIsNone(self.m.lay_out(hits, Path("s.wav"), "S", 0.5, 0.1, 120.0, min_seconds=10.0))
+        plan = self.m.lay_out([(10.0 + i * 0.4, 0.9) for i in range(150)], Path("s.wav"), "S", 0.5, 0.1,
+                              120.0, min_seconds=10.0)
+        self.assertGreaterEqual(plan.seconds, 10.0)
+
     def test_hands_on_fast_forwards_become_montages(self):
         # Episode 2's real plan: the editor picked fast-forwards for everything quiet.
         plan = planner.Plan(montage=[{"id": "B0023", "seconds": 78.0, "reason": "mining diamonds in caves"}],
@@ -321,7 +361,7 @@ class MixTests(unittest.TestCase):
                                   {"id": "B0130", "seconds": 60.0, "speed": 6.0, "reason": "fortress corridors"},
                                   {"id": "B0153", "seconds": 30.0, "speed": 5.0, "reason": "walking warped forest"},
                                   {"id": "B0155", "seconds": 90.0, "speed": 6.0, "reason": "hunting endermen"},
-                                  {"id": "B0170", "seconds": 45.0, "speed": 6.0, "reason": "building the bone meal farm"},
+                                  {"id": "B0170", "seconds": 50.0, "speed": 6.0, "reason": "building the bone meal farm"},
                                   {"id": "B0180", "seconds": 12.0, "speed": 6.0, "reason": "placing a few blocks"}])
         notes = planner.promote_montages(plan, config.DEFAULTS)
         self.assertEqual([m["id"] for m in plan.montage], ["B0023", "B0042", "B0170"])

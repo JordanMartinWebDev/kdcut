@@ -186,8 +186,9 @@ SCHEMA = {
         },
         "fast": {
             "type": "array",
-            "description": "Speed up a quiet stretch after a block instead of cutting it, so viewers "
-                           "see the progress (travel, mining, building, farming) in a few seconds.",
+            "description": "Rarely: speed up a quiet stretch after a block when seeing the trip or the "
+                           "wait is part of the story. A few per video at most; most quiet stretches "
+                           "are cut.",
             "items": {"type": "object", "properties": {
                 "id": {"type": "string", "description": "The block the quiet stretch follows."},
                 "seconds": {"type": "number", "minimum": 4, "maximum": 900,
@@ -301,9 +302,9 @@ def system_prompt(cfg: dict, video: dict) -> str:
         "stray fragment: never cut part of one. Lines marked '↪' continue in the next clip.",
         "- [BUILD CUE] lines ('let's build this thing', 'cue the music', 'start a montage of "
         "mining diamonds', 'let's queue a time lapse') say the work starts now. The quiet "
-        "stretch after one, and any NO TALKING clips right after it, is that work: show it with "
-        "a montage (hands-on building/mining with block sounds) or fast (travel, slow progress), "
-        "never cut it. Clips with NO TALKING were recorded on purpose for exactly this.",
+        "stretch after one, and any NO TALKING clips right after it, is that work: show it, don't "
+        "drop it. Long hands-on work is a montage; shorter work keeps a few seconds in real time "
+        "with an extend. Clips with NO TALKING were recorded on purpose for exactly this.",
         "- Every build needs its payoff: keep the line that says it's done, the test ('let's "
         "see if this works') and the result (the loot, 'it works'). Keep a few seconds of the "
         "finished build with an extend on the 'it's done' line.",
@@ -355,20 +356,22 @@ def system_prompt(cfg: dict, video: dict) -> str:
         "doesn't move the story is the first to cut; menu-heavy stretches (sorting chests, "
         "crafting) are usually cuttable unless the creator is explaining something that matters.",
         "- Quiet stretches: keep the lively ones in real time with an extend (action 4-5, hits, "
-        "anything the outline calls danger or discovery, up to 60s). Hands-on work (building, "
-        "mining, strip mining, digging, clearing land, farming) becomes a montage. Travel "
-        "(walking, riding, flying, sailing somewhere) and waiting become fast instead of cut: "
-        "the viewer sees it happen in a few seconds (speed 3-8, ending up 3-15 s on screen). "
-        "Cut stretches that are mostly menus, AFK or nothing at all. Never use fast or montage "
-        "for a stretch with talking in it.",
+        "anything the outline calls danger or discovery, up to 60s). Everything else that's "
+        "quiet is simply cut: a jump cut is normal and keeps the video moving.",
+        f"- Fast-forward is seasoning, not the default: at most {max_fast(cfg)} in the whole video. "
+        "Use one only where seeing the trip or the wait is part of the story (the long search "
+        "he talks about, the journey he complains about), at speed 3-8 for 3-15 s on screen. "
+        "Ordinary walking, flying, exploring and corridors are cut, not sped up. Never two "
+        "fast-forwards close together, never right next to a montage, never over talking.",
         "- An extend is for showing something (a fight, a reveal, the thing he just named, like "
         "the bookshelf he's checking off). Never extend just to hold a view while he pauses "
         "before talking again: dead air is always cut.",
-        "- Montage is the first choice for hands-on work: any quiet stretch of building, mining, "
-        "digging, clearing land or farming (about 20s or more) is a montage, not fast. It is cut "
-        "to the beat of a song with the block sounds on the beat. Travel, walking and exploring "
-        f"stay fast. Up to {max_montages(cfg)} per video, the best hands-on stretches first; never where "
-        "the creator talks.",
+        f"- Montage: a long quiet stretch of hands-on work (building, mining, digging, clearing "
+        f"land, farming; at least {montage_min_footage(cfg):.0f}s of footage) is cut into a montage "
+        "to the beat of a song, with the block sounds on the beat. It's a real section of the "
+        f"video, 10-20 s on screen. Up to {max_montages(cfg)} per video, the best stretches first. A "
+        "shorter bit of work is never a montage: keep a few seconds with an extend or cut it. "
+        "Never where the creator talks, never travel.",
         "- Lines starting with [on screen ...] describe what was happening during a stretch "
         "where the creator wasn't talking (action 0 = nothing, 3 = intense). For action 2-3, "
         "keep that gameplay with an extend on the block just before it (up to 60s). Action 0-1 "
@@ -487,6 +490,14 @@ def max_montages(cfg: dict) -> int:
     return max(int(cfg.get("edit", {}).get("max_montages", 4)), 0)
 
 
+def max_fast(cfg: dict) -> int:
+    return max(int(cfg.get("edit", {}).get("max_fast_forwards", 3)), 0)
+
+
+def montage_min_footage(cfg: dict) -> float:
+    return float(cfg.get("edit", {}).get("montage_min_footage", 30))
+
+
 HANDS_ON = re.compile(r"\b(build|building|built|mine|mining|strip|dig|digging|tunnel\w*|quarry\w*|clear\w*|"
                       r"terraform\w*|farm|farming|harvest\w*|chop\w*|log(ging)?|plac\w+|break\w*|wall\w*|"
                       r"roof\w*|decorat\w*|landscap\w*|path\w*|bridge|fill\w*|flatten\w*)\b", re.I)
@@ -502,13 +513,48 @@ def promote_montages(plan: Plan, cfg: dict) -> list[str]:
     if room <= 0 or not cfg.get("edit", {}).get("montages", True):
         return []
     taken = {m["id"] for m in plan.montage}
-    picks = [f for f in plan.fast if f["id"] not in taken and float(f.get("seconds", 0)) >= 20
+    picks = [f for f in plan.fast if f["id"] not in taken
+             and float(f.get("seconds", 0)) >= montage_min_footage(cfg)
              and HANDS_ON.search(f.get("reason") or "") and not TRAVEL.search(f.get("reason") or "")]
     picks = sorted(picks, key=lambda f: -float(f.get("seconds", 0)))[:room]
     for f in picks:
         plan.fast.remove(f)
         plan.montage.append({"id": f["id"], "seconds": float(f["seconds"]), "reason": f.get("reason") or ""})
     return [f"Made {f['id']} ({f.get('reason')}) a montage instead of a fast-forward" for f in picks]
+
+
+def space_out(plan: Plan, blocks: list[Block], cfg: dict) -> list[str]:
+    """Keep speed effects from piling up: montages shorter than the minimum footage go, then
+    fast-forwards are capped and spaced out. Montages win (they're the feature), then the
+    longest fast-forwards, the ones most worth showing. What's left over is simply cut.
+    Returns notes for the log."""
+    ed = cfg.get("edit", {})
+    order = {b.id: i for i, b in enumerate(blocks)}
+    gap = int(ed.get("fast_spacing_blocks", 8))
+    notes = []
+    short = [m for m in plan.montage if float(m.get("seconds", 0)) < montage_min_footage(cfg)]
+    for m in short:
+        plan.montage.remove(m)
+        notes.append(f"No montage after {m['id']} ({m.get('reason')}): only {float(m['seconds']):.0f}s of "
+                     "footage, too little for a real montage")
+    anchors = [order[m["id"]] for m in plan.montage if m["id"] in order]
+    keep = []
+    for f in sorted(plan.fast, key=lambda f: -float(f.get("seconds", 0))):
+        i = order.get(f["id"])
+        if i is None:
+            continue
+        why = ""
+        if len(keep) >= max_fast(cfg):
+            why = f"already {max_fast(cfg)} fast-forwards"
+        elif any(abs(i - a) < gap for a in anchors):
+            why = "too close to another fast-forward or montage"
+        if why:
+            notes.append(f"Cut the quiet stretch after {f['id']} ({f.get('reason')}) instead of fast-forwarding: {why}")
+            continue
+        keep.append(f)
+        anchors.append(i)
+    plan.fast = sorted(keep, key=lambda f: order.get(f["id"], 0))
+    return notes
 
 
 def plan_without_ai(blocks: list[Block]) -> Plan:

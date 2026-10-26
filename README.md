@@ -44,13 +44,18 @@ story outline (goals, beats, setups and their payoffs), so every cut is checked 
 story. KDcut also measures the footage itself, for free: how animated your voice is, how much
 the picture moves, how long inventory or chest screens are open, and sudden loud game sounds.
 The AI uses those numbers for stretches the story doesn't decide. Lively wordless moments stay
-in real time and menus and AFK time are cut. Quiet hands-on work (building, mining, digging,
-clearing land, farming) becomes a **montage**: cut to the beat of a song, a cut on every beat and
-half beat however fast the song is, with the block sounds landing on the beat. When the block
-sounds are too faint to line up, it still cuts on the beat. Up to 4 per video (`max_montages`);
-a hands-on stretch the AI marked as a fast-forward is turned into a montage while there's room.
-Travel and waiting are **fast-forwarded** with a small `▶▶ 8x` badge instead of cut. The
-outline is saved as `story.json` next to the timeline.
+in real time; everything else that's quiet is simply cut, since a jump cut keeps the video
+moving. Longer quiet hands-on work (building, mining, digging, clearing land, farming; at least
+30 s of footage) becomes a **montage**: a real section of 10-20 s cut to the beat of a song, a cut
+on every beat and half beat however fast the song is, with the block sounds landing on the beat.
+When there are few block sounds it uses a sparser pattern, and if they're too faint to line up
+it still cuts on the beat. A stretch that can't fill 10 s is cut rather than shown as a short
+burst. Up to 4 per video (`max_montages`).
+
+**Fast-forwards** (with a small `▶▶ 8x` badge) are seasoning: at most 3 per video
+(`max_fast_forwards`), only where seeing the trip or the wait is part of the story, and never
+two within 8 lines of each other or right next to a montage (`fast_spacing_blocks`). The longest
+win; the rest are cut. The outline is saved as `story.json` next to the timeline.
 
 Cuts are tight to your voice: each piece starts 0.1 s before you start talking and ends 0.2 s
 after you stop, measured on the mic track (Whisper's word times are often a few tenths early or
@@ -428,7 +433,8 @@ style_notes = "Keep the jokes and the chat interaction. Cut inventory sorting. D
 keep_pauses_up_to = 0.45  # silences longer than this (voice to voice) are cut
 pad_before = 0.1          # kept before you start talking
 pad_after = 0.2           # breathing room after you stop
-max_montages = 4          # building/mining cut to the beat; travel stays a fast-forward
+max_montages = 4          # building/mining cut to the beat
+max_fast_forwards = 3     # a few sped-up trips per video; the rest of the quiet time is cut
 
 [whisper]
 mic_track = 2
