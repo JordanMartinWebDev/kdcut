@@ -166,15 +166,17 @@ def split_tracks(rec: Path, info: media.MediaInfo, mic: int, dest_dir: Path, log
         if kind in ("voice", "mix"):
             af += ",alimiter=limit=0.89:level=disabled"      # catch shouts after the boost
         src = ["ffmpeg", "-y", "-v", "error", "-i", str(rec), "-map", f"0:a:{stream}", "-vn"]
-        attempts = [
-            # async: OBS tracks can have gaps (e.g. the game paused); fill them with silence so
-            # everything after stays in sync, and so the encoder doesn't choke on the jump.
-            (dest_dir / f"{base}.m4a", ["-af", f"aresample=48000:async=1:first_pts=0,{af}",
-                                        "-c:a", "aac", "-b:a", "256k"]),
-            # Plan B: plain WAV, re-timed so gaps or glitches in the track can't stall the encoder.
-            (dest_dir / f"{base}.wav", ["-af", f"aresample=48000:async=1:first_pts=0,{af}",
-                                        "-c:a", "pcm_s16le", "-rf64", "auto"]),
-        ]
+        # async: OBS tracks can have gaps (e.g. the game paused); fill them with silence so
+        # everything after stays in sync.
+        wav = (dest_dir / f"{base}.wav", ["-af", f"aresample=48000:async=1:first_pts=0,{af}",
+                                          "-c:a", "pcm_s16le", "-rf64", "auto"])
+        aac = (dest_dir / f"{base}.m4a", ["-af", f"aresample=48000:async=1:first_pts=0,{af}",
+                                          "-c:a", "aac", "-b:a", "256k"])
+        # Game tracks go silent whenever the game is paused or quiet, and ffmpeg's AAC encoder
+        # can freeze on long digital silence (it stalled on 3 of Episode 2's 35 game tracks,
+        # costing a minute each before the WAV fallback). WAV never does, so game audio is
+        # written as WAV straight away. The voice track always has some mic noise: AAC first.
+        attempts = [wav] if kind == "game" else [aac, wav]
         out, why = None, ""
         for i, (dest, opts) in enumerate(attempts):
             proc = media.run_watched(src + opts + [str(dest)], info.duration, log=log, timeout=limit,
@@ -184,7 +186,7 @@ def split_tracks(rec: Path, info: media.MediaInfo, mic: int, dest_dir: Path, log
                 break
             dest.unlink(missing_ok=True)
             why = (proc.stderr.strip().splitlines() or ["unknown error"])[0][:200]
-            log(f"Writing {name} audio failed: {why}" + ("; trying another way" if i == 0 else ""))
+            log(f"Writing {name} audio failed: {why}" + ("; trying another way" if i + 1 < len(attempts) else ""))
         if out is None:
             if kind == "game":       # the recording's own audio still carries track 1
                 log(f"Skipped levelling game audio from {rec.name}; using the recording's own audio")
