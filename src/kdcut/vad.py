@@ -69,12 +69,13 @@ class Voice:
         return t            # nothing voiced nearby (a quiet word): trust Whisper
 
     def cut_between(self, a_end: float, b_start: float, before: float = 0.15,
-                    after: float = 0.1) -> tuple[float, bool]:
+                    after: float = 0.1, min_gap: float = 0.06) -> tuple[float, bool]:
         """The best place to cut between one stretch of talk ending (Whisper says a_end) and
         the next starting (b_start): the middle of the longest quiet moment around the
         boundary. Returns (time, clean); clean is False when the voice never stops there
         (one breath, e.g. "...that new world feeling let's go"), and the time is then the
-        quietest instant."""
+        quietest instant. `min_gap` is the shortest quiet that counts as a pause (a dip inside a
+        word like "th|em" can be a few hundredths long)."""
         lo = min(a_end, b_start) - before
         hi = b_start + after
         i0, i1 = self._i(max(lo, 0.0)), self._i(hi)
@@ -91,7 +92,7 @@ class Voice:
                     best = (end - run_start, run_start)
                 run_start = None
         length, start = best
-        if length * STEP >= 0.06:
+        if length * STEP >= min_gap - 1e-9:
             return (start + length / 2) * STEP, True
         k = min(range(i0, i1 + 1), key=lambda i: self.levels[i])
         return k * STEP, False
