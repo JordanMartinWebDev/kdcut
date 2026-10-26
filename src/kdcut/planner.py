@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -197,8 +198,9 @@ SCHEMA = {
         },
         "montage": {
             "type": "array",
-            "description": "At most 2 per video: a hands-on quiet stretch (building, mining, clearing "
-                           "land, farming) cut into a beat-synced montage, block sounds on the beat.",
+            "description": "Hands-on quiet stretches (building, mining, digging, clearing land, "
+                           "farming) cut into a beat-synced montage, block sounds on the beat. "
+                           "Use this, not fast, for hands-on work.",
             "items": {"type": "object", "properties": {
                 "id": {"type": "string", "description": "The block the quiet stretch follows."},
                 "seconds": {"type": "number", "minimum": 20, "maximum": 900,
@@ -353,18 +355,20 @@ def system_prompt(cfg: dict, video: dict) -> str:
         "doesn't move the story is the first to cut; menu-heavy stretches (sorting chests, "
         "crafting) are usually cuttable unless the creator is explaining something that matters.",
         "- Quiet stretches: keep the lively ones in real time with an extend (action 4-5, hits, "
-        "anything the outline calls danger or discovery, up to 60s). For long stretches where "
-        "progress is happening slowly (walking or flying somewhere, strip mining, building, "
-        "farming), use fast instead of cutting: the viewer sees it happen in a few seconds "
-        "(speed 3-8, ending up 3-15 s on screen). Cut stretches that are mostly menus, AFK or "
-        "nothing at all. Never use fast for a stretch with talking in it.",
+        "anything the outline calls danger or discovery, up to 60s). Hands-on work (building, "
+        "mining, strip mining, digging, clearing land, farming) becomes a montage. Travel "
+        "(walking, riding, flying, sailing somewhere) and waiting become fast instead of cut: "
+        "the viewer sees it happen in a few seconds (speed 3-8, ending up 3-15 s on screen). "
+        "Cut stretches that are mostly menus, AFK or nothing at all. Never use fast or montage "
+        "for a stretch with talking in it.",
         "- An extend is for showing something (a fight, a reveal, the thing he just named, like "
         "the bookshelf he's checking off). Never extend just to hold a view while he pauses "
         "before talking again: dead air is always cut.",
-        "- Montage: for the one or two best hands-on stretches (building, mining, clearing land, "
-        "with hits and action, few menus, at least ~40s long), use montage instead of fast: the "
-        "stretch is cut to the beat of a song with the block sounds on the beat. Travel and walking "
-        "stay fast. Never more than 2 per video; never where the creator talks.",
+        "- Montage is the first choice for hands-on work: any quiet stretch of building, mining, "
+        "digging, clearing land or farming (about 20s or more) is a montage, not fast. It is cut "
+        "to the beat of a song with the block sounds on the beat. Travel, walking and exploring "
+        f"stay fast. Up to {max_montages(cfg)} per video, the best hands-on stretches first; never where "
+        "the creator talks.",
         "- Lines starting with [on screen ...] describe what was happening during a stretch "
         "where the creator wasn't talking (action 0 = nothing, 3 = intense). For action 2-3, "
         "keep that gameplay with an extend on the block just before it (up to 60s). Action 0-1 "
@@ -479,6 +483,34 @@ def user_prompt(blocks_text: str, broll: list[tuple], vocab: dict[str, list[str]
     return "\n".join(parts)
 
 
+def max_montages(cfg: dict) -> int:
+    return max(int(cfg.get("edit", {}).get("max_montages", 4)), 0)
+
+
+HANDS_ON = re.compile(r"\b(build|building|built|mine|mining|strip|dig|digging|tunnel\w*|quarry\w*|clear\w*|"
+                      r"terraform\w*|farm|farming|harvest\w*|chop\w*|log(ging)?|plac\w+|break\w*|wall\w*|"
+                      r"roof\w*|decorat\w*|landscap\w*|path\w*|bridge|fill\w*|flatten\w*)\b", re.I)
+TRAVEL = re.compile(r"\b(walk\w*|ride|riding|rode|fly\w*|flight|elytra|sail\w*|boat|swim\w*|run|running|"
+                    r"travel\w*|journey|trek|head\w*|back home|explor\w*|look\w* for|search\w*|hunt\w*|"
+                    r"corridor\w*|portal|wait\w*|night)\b", re.I)
+
+
+def promote_montages(plan: Plan, cfg: dict) -> list[str]:
+    """Hands-on stretches the AI made fast-forwards become montages, up to the limit: the
+    channel prefers a montage for building and mining. Longest first. Returns notes."""
+    room = max_montages(cfg) - len(plan.montage)
+    if room <= 0 or not cfg.get("edit", {}).get("montages", True):
+        return []
+    taken = {m["id"] for m in plan.montage}
+    picks = [f for f in plan.fast if f["id"] not in taken and float(f.get("seconds", 0)) >= 20
+             and HANDS_ON.search(f.get("reason") or "") and not TRAVEL.search(f.get("reason") or "")]
+    picks = sorted(picks, key=lambda f: -float(f.get("seconds", 0)))[:room]
+    for f in picks:
+        plan.fast.remove(f)
+        plan.montage.append({"id": f["id"], "seconds": float(f["seconds"]), "reason": f.get("reason") or ""})
+    return [f"Made {f['id']} ({f.get('reason')}) a montage instead of a fast-forward" for f in picks]
+
+
 def plan_without_ai(blocks: list[Block]) -> Plan:
     """Fallback: honour spoken cues and trim silences only."""
     plan = Plan()
@@ -562,7 +594,7 @@ def make_plan(blocks: list[Block], recordings: list[Path], cfg: dict, video: dic
                 plan.extend[e["id"]] = float(min(max(e.get("seconds", 0), 0), 60))
         for m in result.get("montage", []):
             item = clean_fast({**m, "speed": 4}, chunk_ids, (quiet_seconds or {}))
-            if item and len(plan.montage) < 2 and all(x["id"] != item["id"] for x in plan.montage):
+            if item and len(plan.montage) < max_montages(cfg) and all(x["id"] != item["id"] for x in plan.montage):
                 plan.montage.append({"id": item["id"], "seconds": float(min(float(m.get("seconds", 0)),
                                                                             (quiet_seconds or {}).get(item["id"], 1e9))),
                                      "reason": item["reason"]})

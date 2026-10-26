@@ -96,6 +96,34 @@ class Voice:
         k = min(range(i0, i1 + 1), key=lambda i: self.levels[i])
         return k * STEP, False
 
+    def onset_after(self, t: float, limit: float = 0.6) -> float:
+        """If the voice hasn't started yet at t (Whisper put the first word early), where it
+        really starts: the first voiced moment within `limit`. Otherwise t."""
+        if not self.levels or self.on(t):
+            return t
+        i, stop = self._i(t), self._i(t + limit)
+        while i <= stop and i < len(self.levels):
+            if self.levels[i] > self.threshold:
+                return max(t, i * STEP)
+            i += 1
+        return t            # nothing voiced nearby (a quiet word): trust Whisper
+
+    def runs(self, a: float, b: float, min_gap: float) -> list[tuple[float, float]]:
+        """Stretches of voice between a and b, joined across silences shorter than `min_gap`.
+        A silence of `min_gap` or longer is a pause the edit can cut out."""
+        if not self.levels or b <= a:
+            return []
+        out: list[list[float]] = []
+        i0, i1 = self._i(a), self._i(b)
+        for i in range(i0, i1 + 1):
+            if self.levels[i] > self.threshold:
+                t0, t1 = i * STEP, (i + 1) * STEP
+                if out and t0 - out[-1][1] < min_gap:
+                    out[-1][1] = t1
+                else:
+                    out.append([t0, t1])
+        return [(max(x, a), min(y, b)) for x, y in out]
+
     def onset_before(self, t: float, limit: float = 0.8, quiet: float = 0.1) -> float:
         """If the voice had already started before t, where it really starts."""
         if not self.levels or not any(self.on(t + k * STEP) for k in range(-3, 3)):

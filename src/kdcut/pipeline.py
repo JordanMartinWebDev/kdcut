@@ -270,6 +270,8 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     plan.notes += clues.enforce(plan, blocks)       # waits he skips ("it's nighttime") are cut
     if glued:
         r.log(f"Kept {len(glued)} short bit(s) that couldn't be cut cleanly")
+    for note in planner.promote_montages(plan, cfg):  # building/mining: montage before fast-forward
+        r.log(note)
 
     # Packaging (titles, description, cold open) needs the whole kept story, so it is
     # decided now, before the timeline is built. Cached alongside plan.json.
@@ -476,7 +478,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
                                 "edit.minecraft_assets to your launcher's assets folder)")
         except ImportError:
             matcher = None
-        for n, item in enumerate(plan.montage[:int(ed.get("max_montages", 2))]):
+        for n, item in enumerate(plan.montage[:planner.max_montages(cfg)]):
             b = by_id.get(item.get("id"))
             if b is None:
                 continue
