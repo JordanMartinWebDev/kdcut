@@ -54,6 +54,30 @@ class CaptionTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
 class StemTests(unittest.TestCase):
+    def test_game_bangs_stay_under_the_voice(self):
+        """Episode 2's first game track: -47 LUFS with peaks at -17 dB. It used to get +16 dB, so
+        the loudest game sounds hit -1 dB, as loud as the voice's peaks."""
+        import subprocess
+        from kdcut import audioprep, media
+        d = Path(tempfile.mkdtemp())
+        try:
+            rec = d / "rec.mkv"
+            # Quiet game ambience with one loud bang at 3 s.
+            subprocess.run(["ffmpeg", "-v", "error", "-y",
+                            "-f", "lavfi", "-i", "sine=frequency=440:duration=6",
+                            "-f", "lavfi", "-i",
+                            "aevalsrc='0.004*sin(2*PI*200*t)+if(between(t,3,3.2),0.14*sin(2*PI*90*t),0)':d=6",
+                            "-map", "0:a", "-map", "1:a", "-c:a", "aac", "-b:a", "256k", str(rec)], check=True)
+            info = media.probe(rec)
+            with mock.patch.object(audioprep, "LOUDNESS_CACHE", d / "loud.json"):
+                stems = audioprep.split_tracks(rec, info, 0, d / "audio", log=lambda *_: None)
+            game = next(s for s in stems if s.kind == "game")
+            self.assertLessEqual(game.gain_db, 14.0)
+            _, peak = audioprep.measure(game.path)
+            self.assertLess(peak, audioprep.GAME_CEILING + 1.5)      # true peak can sit a hair over
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
     def test_game_audio_is_wav_and_voice_is_aac(self):
         """Game tracks go digitally silent when the game is paused, which can freeze ffmpeg's AAC
         encoder: they're written as WAV straight away."""

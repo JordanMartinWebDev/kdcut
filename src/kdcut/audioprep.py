@@ -25,6 +25,8 @@ from kdcut.config import HOME_DIR
 
 VOICE_LUFS = -16.0
 GAME_LUFS = -30.0
+GAME_CEILING = -12.0      # loudest a game sound may get (dBFS): explosions, lava and doors stay
+                          # well under your voice, which peaks near -1
 SFX_LUFS = -20.0
 LOUDNESS_CACHE = HOME_DIR / "loudness.json"
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -147,7 +149,8 @@ def split_tracks(rec: Path, info: media.MediaInfo, mic: int, dest_dir: Path, log
     for stream, kind, label, target in plan:
         base = f"{rec.stem}.a{stream + 1}.{kind}"
         meta = dest_dir / f"{base}.json"
-        sig = {"size": st.st_size, "mtime": int(st.st_mtime), "stream": stream, "target": target, "v": 2}
+        sig = {"size": st.st_size, "mtime": int(st.st_mtime), "stream": stream, "target": target,
+               "v": 3 if kind == "game" else 2}
         try:
             old = json.loads(meta.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -161,10 +164,15 @@ def split_tracks(rec: Path, info: media.MediaInfo, mic: int, dest_dir: Path, log
         lufs, peak = measure(rec, stream, timeout=limit, total=info.duration,
                              label=f"Measuring {name} audio", log=log)
         media.debug(f"{name}: {lufs} LUFS, peak {peak}")
-        gain = gain_for(lufs, peak, target, over=12.0 if kind in ("voice", "mix") else 0.0)
-        af = f"volume={gain}dB"
-        if kind in ("voice", "mix"):
-            af += ",alimiter=limit=0.89:level=disabled"      # catch shouts after the boost
+        if kind == "game":
+            # Game tracks are mostly quiet with the odd loud bang, so levelling them to an average
+            # used to boost the bangs by up to 18 dB, right up to full scale. Now the boost is
+            # capped and a limiter holds every game sound under GAME_CEILING.
+            gain = gain_for(lufs, peak, target, hi=14.0, over=GAME_CEILING + 1.0 + 9.0)
+            af = f"volume={gain}dB,alimiter=limit={10 ** (GAME_CEILING / 20):.3f}:level=disabled"
+        else:
+            gain = gain_for(lufs, peak, target, over=12.0)
+            af = f"volume={gain}dB,alimiter=limit=0.89:level=disabled"      # catch shouts after the boost
         src = ["ffmpeg", "-y", "-v", "error", "-i", str(rec), "-map", f"0:a:{stream}", "-vn"]
         # async: OBS tracks can have gaps (e.g. the game paused); fill them with silence so
         # everything after stays in sync.

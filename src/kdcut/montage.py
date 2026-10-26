@@ -329,6 +329,15 @@ def pattern(n_bars: int, half_ok: bool, ramps_ok: bool = True) -> list[str]:
     return out
 
 
+def sparse(n_bars: int, level: int = 1) -> list[str]:
+    """For stretches with fewer block sounds. Level 1: a bar of cuts on every beat, then a
+    fast-forward shot into the next (3 block sounds a bar instead of up to 8). Level 2: every
+    bar is a fast-forward shot landing on two beat cuts (2 a bar)."""
+    if level >= 2:
+        return ["ramp"] * n_bars
+    return [("chop" if k % 2 == 0 else "ramp") for k in range(n_bars)]
+
+
 def allocate(spec: list[tuple[str, float]], hits: list[float], sounds: list[float], first: int
              ) -> list[Segment] | None:
     """Give each slice its footage, in recording order, never reusing any. `hits` are the block
@@ -385,6 +394,7 @@ def spread(names: list[str], u: float, times: list[float], sounds: list[float]) 
     if not times:
         return None
     bounds = [round(k * len(times) / n_bars) for k in range(n_bars + 1)]
+    later = [[x for name in names[b + 1:] for x in BARS[name]] for b in range(n_bars)]
     segs: list[Segment] = []
     t_clip = 0.0
     cursor = times[0] - PRE - 1e-6
@@ -414,8 +424,13 @@ def spread(names: list[str], u: float, times: list[float], sounds: list[float]) 
                 # (from wherever the last cut ended could be walking or eating).
                 target = (aims[k] if k < m else share[-1]) - PRE
                 src = max(cursor + 0.05, target - dur * RAMP_SPEED)
-                segs.append(Segment(t_clip, dur, src, RAMP_SPEED))
-                cursor = src + dur * RAMP_SPEED
+                # Full speed when there are block sounds to spare; when they're scarce, never run
+                # past the next cut's sound (the shot is then less sped up, down to real time).
+                need = (m - k) + sum(1 for kind, _ in later[b] if kind == "hit")
+                left = len(times) - bisect.bisect_left(times, src + dur * RAMP_SPEED + PRE)
+                speed = RAMP_SPEED if left >= need else min(max((target - src) / dur, 1.0), RAMP_SPEED)
+                segs.append(Segment(t_clip, dur, src, round(speed, 3)))
+                cursor = src + dur * speed
             t_clip += dur
     return segs
 
@@ -430,7 +445,7 @@ def _start(starts, fits, length, song_len, skip_intro):
 
 def lay_out(hits: list[tuple[float, float]], song: Path, song_name: str, period: float, phase: float,
             song_len: float, target: float = 15.0, skip_intro: float = 12.0, bar_offset: int = 0,
-            starts: list[float] | None = None) -> Plan | None:
+            starts: list[float] | None = None, min_seconds: float = 0.0) -> Plan | None:
     """Fit a montage of about `target` seconds in whole bars of the song, starting on a
     downbeat. Cuts on every beat and half beat, however fast the song (down to a few frames),
     speeding up, with fast-forward shots in between. Footage comes from the busiest run of
@@ -439,18 +454,21 @@ def lay_out(hits: list[tuple[float, float]], song: Path, song_name: str, period:
     half_ok = u / 2 >= MIN_SLICE
     bar = 4 * u
     times = [t for t, _ in hits]
-    most = max(int(round(target / bar)), 2)
+    least = max(2, math.ceil(min_seconds / bar - 1e-9))      # a montage is a section, not a blip
+    most = max(int(round(target / bar)), least)
     # In order: with fast-forward shots, from the busiest run (a slightly shorter montage is
     # fine); then allowed to start a little earlier; only then without fast-forwards.
-    attempts = [("spread", n) for n in range(most, 1, -1)]      # first choice: the whole stretch
+    # First choice: the whole stretch, busy pattern then a sparser one (beat cuts with
+    # fast-forward shots between) when there aren't many block sounds to go round.
+    attempts = [("spread", n, level) for n in range(most, least - 1, -1) for level in (0, 1, 2)]
     for ramps_ok in (True, False):
-        fewest = max(2, int(most * 0.6)) if ramps_ok else 2
+        fewest = max(least, int(most * 0.6)) if ramps_ok else least
         for widen in (False, True):
             attempts += [(ramps_ok, widen, n) for n in range(most, fewest - 1, -1)]
     for attempt in attempts:
         if attempt[0] == "spread":
             n_bars = attempt[1]
-            names = pattern(n_bars, half_ok, True)
+            names = pattern(n_bars, half_ok, True) if attempt[2] == 0 else sparse(n_bars, attempt[2])
             length = n_bars * bar
             downs = [phase + (bar_offset + 4 * k * round(u / period)) * period
                      for k in range(int(song_len / bar) + 1)]
@@ -622,7 +640,7 @@ def block_hits(x, start: float, end: float, matcher, skip=()) -> list[tuple[floa
 
 def make(rec: Path, game_stream: int | None, start: float, end: float, song, fps, width: int, height: int,
          dest: Path, music_db: float, sig=None, target: float = 15.0, matcher=None, log=print,
-         punch: float = 0.0) -> Result | None:
+         punch: float = 0.0, min_seconds: float = 10.0) -> Result | None:
     """Build a montage from rec[start:end] to `song` (a music.Track), cutting only on blocks
     breaking or being placed (`matcher`: mcsounds.Matcher). None when there's no matcher or
     the stretch doesn't have enough block sounds (the caller falls back to a fast-forward)."""
@@ -646,7 +664,7 @@ def make(rec: Path, game_stream: int | None, start: float, end: float, song, fps
     plan = None
     if len(hits) >= MIN_HITS:
         plan = lay_out(hits, Path(song.path), song.name, period, phase, window, target, bar_offset=offset,
-                       starts=loud)
+                       starts=loud, min_seconds=min_seconds)
     if plan is None:
         # Too few clear block sounds (quiet digging, music over the game, no sound files): still
         # a montage, cut on every beat, with footage spread evenly through the stretch.
@@ -654,11 +672,11 @@ def make(rec: Path, game_stream: int | None, start: float, end: float, song, fps
             log(f"Only {len(hits)} clear block sounds after {start:.0f}s, so this montage cuts on the beat "
                 "without lining them up")
         plan = lay_out(steady_points(start, end, menus), Path(song.path), song.name, period, phase, window,
-                       target, bar_offset=offset, starts=loud)
+                       target, bar_offset=offset, starts=loud, min_seconds=min_seconds)
         if plan is not None:
             plan.sounds = False
     if plan is None:
-        log("Montage skipped: the stretch is too short to fill even two bars of the song")
+        log(f"Montage skipped: the stretch can't fill {min_seconds:.0f}s of the song")
         return None
     gains = hit_gains(rec, game_stream, plan.hits) if plan.sounds else []
     file, frames = render(plan, rec, game_stream, dest, fps, width, height, music_db, gains, log=log, punch=punch)

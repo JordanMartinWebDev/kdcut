@@ -272,6 +272,8 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         r.log(f"Kept {len(glued)} short bit(s) that couldn't be cut cleanly")
     for note in planner.promote_montages(plan, cfg):  # building/mining: montage before fast-forward
         r.log(note)
+    for note in planner.space_out(plan, blocks, cfg):  # a few speed effects, spaced out; the rest is cut
+        r.log(note)
 
     # Packaging (titles, description, cold open) needs the whole kept story, so it is
     # decided now, before the timeline is built. Cached alongside plan.json.
@@ -503,16 +505,16 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
                                            work / "montage" / f"montage_{b.id}.mp4",
                                            music_db=audioprep.music_gain(Path(song.path)) + max(vol + 16.0, -8.0),
                                            sig=sig, target=float(ed.get("montage_seconds", 15)),
+                                           min_seconds=float(ed.get("montage_min_seconds", 10)),
                                            matcher=matcher, log=r.log,
                                            punch=float(ed.get("montage_punch", 0.06) or 0.0))
                 except ImportError:
                     r.log("Montage skipped: numpy isn't available")
                 except media.MediaError as exc:
                     r.log(f"Montage after {b.id} skipped: {exc}")
-            if res is None:            # show the stretch as a fast-forward instead
-                real = span[1] - span[0]
-                fast_items.append({"id": b.id, "seconds": real, "speed": round(min(max(real / 12.0, 3.0), 12.0), 1),
-                                   "reason": (item.get("reason") or "") + " (montage fallback)"})
+            if res is None:            # no real montage possible: the stretch is cut, not sped up
+                tl_notes.append(f"The stretch after {b.id} ({item.get('reason')}) couldn't make a full montage, "
+                                "so it's cut")
                 continue
             montage_songs.add(song.path)
             clip = Clip(path=res.file, src_in=0, dur=res.frames, rec=0, role="montage",
