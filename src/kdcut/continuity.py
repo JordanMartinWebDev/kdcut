@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 from kdcut.blocks import Block, fmt_ts
 
-VERSION = 2
+VERSION = 3
 
 SCHEMA = {
     "type": "object",
@@ -55,7 +55,11 @@ SYSTEM = (
     "Find every spot where the viewer would lose the story, and fix it:\n"
     "- A kept line refers to something the viewer never saw or heard because it was cut ('get my "
     "stuff back' when the death was cut; 'also check' when 'as for bookshelves' was cut): "
-    "restore the cut lines it needs.\n"
+    "restore the cut lines it needs. A line that reacts to the one before it ('that's right, I "
+    "said it', 'like I said') needs that line.\n"
+    "- The first kept line of the video must make sense to someone who just clicked. If it "
+    "reacts to or continues a cut line, restore that line. A cut labelled 'cold open' is not "
+    "the teaser (that is made separately); treat it like any other cut.\n"
     "- A checklist or a sentence spread over several clips is partly cut: restore the rest.\n"
     "- A [on screen] note shows an event the story depends on (a death, a discovery) and the "
     "line about it was cut: restore it.\n"

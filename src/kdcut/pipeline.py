@@ -266,6 +266,8 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     # Short cut bits said in one breath with kept talk can't be cut cleanly: keep them.
     # (Applied on every run, so saved plans benefit too.)
     planner.protect_sentences(plan, blocks)         # incl. sentences carried across clips
+    if planner.protect_context(plan, blocks):       # "that's right, I said it" needs what he said
+        r.log("Kept cut line(s) that the next kept line reacts to")
     glued = planner.protect_joins(plan, blocks, voices)
     plan.notes += clues.enforce(plan, blocks)       # waits he skips ("it's nighttime") are cut
     if glued:
@@ -345,6 +347,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
         back = continuity.apply(plan, fixes, blocks)
         if back:
             planner.protect_sentences(plan, blocks)
+            planner.protect_context(plan, blocks)
             planner.protect_joins(plan, blocks, voices)
             r.log(f"Brought back {len(back)} line(s) the story needs")
             for x in fixes.restore:

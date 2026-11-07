@@ -122,6 +122,45 @@ def protect_sentences(plan: Plan, blocks: list[Block], joined: float = 1.2) -> l
     return restored
 
 
+# Lines that react to what was just said: "yeah, that's right, I said it", "like I said".
+# Without the line before them they make no sense ("Said what?").
+BACKREF = re.compile(r"\b(that'?s right|i said it|like i said|as i said|i (just )?said that|"
+                     r"(i )?told you|you heard me|that'?s what i said|i know,? i know|i mean it)\b")
+
+
+def refers_back(text: str, first_words: int = 8) -> bool:
+    """Does the line open by reacting to what came right before it?"""
+    head = " ".join(_words(text)[:first_words])
+    return bool(BACKREF.search(head))
+
+
+def protect_context(plan: Plan, blocks: list[Block], near: float = 8.0) -> list[str]:
+    """Bring back a cut line when the kept line after it reacts to it. "my world looks like
+    garbage, yeah" / "that's right, I said it, it looks horrible": cutting the first line
+    leaves the video opening on "said what?". Retakes still go. Returns what was restored."""
+    from kdcut.blocks import ends_sentence
+    restored = []
+    for k, b in enumerate(blocks):
+        if k == 0 or b.id in plan.drop or "forced_drop" in b.flags or not refers_back(b.text):
+            continue
+        j = k - 1
+        while j >= 0:
+            p, after = blocks[j], blocks[j + 1]
+            if (p.source != b.source or p.id not in plan.drop or "forced_drop" in p.flags
+                    or after.start - p.end > near or is_restart(p.text, b.text)):
+                break
+            plan.drop.pop(p.id, None)
+            restored.append(p.id)
+            # Keep walking back only while the line runs straight on from the one before.
+            if j == 0 or ends_sentence(blocks[j - 1].text) or p.start - blocks[j - 1].end >= 1.2:
+                break
+            j -= 1
+    if restored:
+        plan.notes.append(f"Kept {len(restored)} line(s) the AI wanted to cut, because the next kept "
+                          "line reacts to them ('that's right, I said it'): " + ", ".join(restored))
+    return restored
+
+
 def protect_joins(plan: Plan, blocks: list[Block], voices: dict, max_seconds: float = 2.5,
                   near: float = 1.0) -> list[str]:
     """Keep short cut fragments that can't be cut cleanly. When the creator says two things
@@ -382,6 +421,10 @@ def system_prompt(cfg: dict, video: dict) -> str:
         "- The first 30 seconds decide whether people stay. Get to the point fast: keep a quick "
         "greeting, but cut long 'hey guys, welcome back, hope you're all doing well' warm-ups, "
         "recaps nobody needs, and housekeeping (settings, mods, sponsors) before the action.",
+        "- The video starts on the creator's first kept line, and it must make sense to someone "
+        "who just clicked. His opening line is the intro, not a cold open (the teaser is picked "
+        "separately, later): never cut it as a 'cold open'. When the next line reacts to it "
+        "('my world looks like garbage' / 'yeah, that's right, I said it'), keep both or neither.",
         "- Within the first minute the viewer should know what this video is about and why it's "
         "worth watching (the goal, the challenge, the stakes). Keep the line where that is said.",
         "- Be a little tighter in the first few minutes, but only by cutting waste, never story "
@@ -684,5 +727,8 @@ def make_plan(blocks: list[Block], recordings: list[Path], cfg: dict, video: dic
     restored = protect_sentences(plan, blocks)
     if restored:
         log(f"Kept {len(restored)} block(s) whose cut would have split a sentence")
+    reacted = protect_context(plan, blocks)
+    if reacted:
+        log(f"Kept {len(reacted)} block(s) that the next kept line reacts to")
     plan.blocks_key = blocks_key(blocks)
     return plan
