@@ -125,8 +125,11 @@ def parse_name(stem: str) -> tuple[str, str]:
     'alexgrohl-happy-day-185750' (Pixabay) -> ('Happy Day', 'alexgrohl')."""
     m = PIXABAY_NAME.match(stem.strip())
     if m and " " not in stem:
-        title = m.group(2).replace("-", " ").replace("_", " ").strip()
-        return title.title(), m.group(1)
+        words = m.group(2).replace("_", "-").split("-")
+        # Pixabay slugs keep HTML entities: '&' -> 'amp', "zelda's" -> 'zeldax27s'.
+        words = ["&" if w == "amp" else w.replace("x27", "'") for w in words if w]
+        title = " ".join(w if w == "&" else w[:1].upper() + w[1:] for w in words)
+        return title, m.group(1)
     s = re.sub(r"^ES[_ ]+", "", stem).strip()
     s = re.sub(r"\s*\((?:\d+|instrumental version|main version)\)$", "", s, flags=re.I)
     s = re.sub(r"(?<=\S)\(\d+\)$", "", s).strip()          # 'Beater Head(1)'
