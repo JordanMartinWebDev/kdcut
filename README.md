@@ -215,6 +215,9 @@ untagged primary tracks by name. Mood subfolders (`Calm`, `Upbeat`, `Epic`...) i
 folder give it more to go on. Pixabay music can still get a Content ID claim on YouTube; keep the
 license file from each download so you can dispute one.
 
+If a song gets claimed, move it into a subfolder called `Claimed` (or `Do not use`) inside its
+music folder. KDcut skips those from then on.
+
 **Feel** (Settings → Music) decides what the AI may pick from. **Let the AI choose** (the default)
 offers the whole library and asks for whatever makes the video most entertaining; each track is
 labelled bright, scary or somber so one friendly tag can't fool it. **Upbeat only**, **Chill** and
