@@ -481,7 +481,7 @@ class SettingsDialog(QDialog):
         mbox2.addWidget(label("Rest of the library (used when nothing primary fits)", "hint"))
         mbox2.addWidget(self.music_dirs)
         mbox2.addLayout(mrow)
-        mbox2.addWidget(label("Only music you're licensed to use, e.g. your Epidemic Sound downloads "
+        mbox2.addWidget(label("Only music you're licensed to use, e.g. your Epidemic Sound or Pixabay downloads "
                               "(connect your YouTube channel in Epidemic). Mood subfolders like Calm, "
                               "Tense or Upbeat help the AI choose.", "hint"))
         form.addRow("Music", mbox2)

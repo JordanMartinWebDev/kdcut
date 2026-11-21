@@ -209,6 +209,12 @@ rest of the library is the fallback, used only where no primary track fits or th
 have already played in that episode. The default primary folder is `~/Downloads/New Editing Music`;
 a missing primary folder is simply skipped.
 
+Music from **Pixabay** works too. Its files are named `username-song-title-123456.mp3` and carry
+no mood or tempo tags, so KDcut shows the AI the song title ("Happy Day") and tells it to judge
+untagged primary tracks by name. Mood subfolders (`Calm`, `Upbeat`, `Epic`...) inside the primary
+folder give it more to go on. Pixabay music can still get a Content ID claim on YouTube; keep the
+license file from each download so you can dispute one.
+
 **Feel** (Settings → Music) decides what the AI may pick from. **Let the AI choose** (the default)
 offers the whole library and asks for whatever makes the video most entertaining; each track is
 labelled bright, scary or somber so one friendly tag can't fool it. **Upbeat only**, **Chill** and

@@ -65,5 +65,24 @@ class PrimaryTests(unittest.TestCase):
             self.assertFalse(any(t.primary for t in lib.music))
 
 
+class PixabayTests(unittest.TestCase):
+    def test_pixabay_filename(self):
+        self.assertEqual(music.parse_name("alexgrohl-happy-day-185750"), ("Happy Day", "alexgrohl"))
+        self.assertEqual(music.parse_name("ES_Flying Over Hills - Hallman"), ("Flying Over Hills", "Hallman"))
+        self.assertEqual(music.parse_name("my-song"), ("my-song", ""))
+
+    def test_genre_only_track_is_music_unless_epidemic(self):
+        self.assertFalse(music.looks_like_sfx("x", 150, "Pop", "", "", [], epidemic=False))
+        self.assertTrue(music.looks_like_sfx("x", 150, "Ambience", "", "", [], epidemic=True))
+
+    def test_untagged_primary_is_judged_by_name(self):
+        t = music.Track(path="/p/a.mp3", title="Happy Day", artist="a", tags=[], duration=120, primary=True)
+        self.assertIn("judge it by its name", music.library_text([t], {}))
+
+    def test_montage_skips_calm_primary(self):
+        calm = track("Lofi Chill", True, mood="", energy="", genre="")
+        self.assertEqual(montage.pick_song([calm, OLD_A], {}).title, "Old A")
+
+
 if __name__ == "__main__":
     unittest.main()
