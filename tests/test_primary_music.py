@@ -65,6 +65,19 @@ class PrimaryTests(unittest.TestCase):
             self.assertFalse(any(t.primary for t in lib.music))
 
 
+class ClaimedTests(unittest.TestCase):
+    def test_claimed_folder_is_skipped(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d, "new")
+            Path(root, "Claimed").mkdir(parents=True)
+            Path(root, "keep-me-123456.mp3").write_bytes(b"x")
+            Path(root, "Claimed", "gerudo-valley-421677.mp3").write_bytes(b"x")
+            info = mock.Mock(tags={}, duration=180.0)
+            with mock.patch.object(music.media, "probe", return_value=info):
+                lib = music.scan_library([], cache_file=Path(d, "i.json"), log=lambda m: None, primary=[root])
+            self.assertEqual([t.title for t in lib.music], ["Me"])
+
+
 class PixabayTests(unittest.TestCase):
     def test_pixabay_filename(self):
         self.assertEqual(music.parse_name("alexgrohl-happy-day-185750"), ("Happy Day", "alexgrohl"))

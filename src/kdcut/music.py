@@ -23,6 +23,12 @@ from kdcut.config import HOME_DIR
 
 MUSIC_EXTS = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg"}
 HISTORY_FILE = HOME_DIR / "music_history.json"
+# Tracks in a folder with one of these names are never used (e.g. a song YouTube claimed).
+SKIP_FOLDERS = {"claimed", "do not use", "dont use", "don't use", "excluded", "not used"}
+
+
+def skipped(rel_parts) -> bool:
+    return any(part.strip().lower() in SKIP_FOLDERS for part in rel_parts)
 
 
 @dataclass
@@ -204,6 +210,8 @@ def scan_library(folders: list[str | Path], cache_file: Path | None = None, log=
             if not p.is_file() or p.suffix.lower() not in MUSIC_EXTS or p.name.startswith("._"):
                 continue
             if str(p) in seen_files:           # a primary folder inside a regular one
+                continue
+            if skipped(p.relative_to(root).parent.parts):
                 continue
             seen_files.add(str(p))
             prim = is_primary or _under(p, primary_roots)
