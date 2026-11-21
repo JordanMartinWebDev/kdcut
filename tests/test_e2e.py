@@ -348,6 +348,11 @@ class EndToEnd(unittest.TestCase):
             if main.tag != "asset-clip" or main.get("name") == "End screen":
                 continue
             self.assertEqual(main.get("srcEnable"), "video")
+            # Resolve ignores srcEnable: the recording's own audio must be muted, or the game
+            # plays twice (once from the video clip, once from the Game track) and sounds tinny.
+            own = main.find("adjust-volume")
+            self.assertIsNotNone(own, main.get("name"))
+            self.assertLessEqual(float(own.get("amount").rstrip("dB")), -90)
             kids = {c.get("lane"): c for c in main if c.tag == "asset-clip"}
             self.assertTrue(kids["-1"].get("name").startswith("Voice - "))
             self.assertTrue(kids["-2"].get("name").startswith("Game - "))

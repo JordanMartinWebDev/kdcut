@@ -100,9 +100,19 @@ class _Writer:
             if clip.enable != "all":
                 attrs["srcEnable"] = clip.enable
         el = ET.SubElement(parent, tag, attrs)
-        if clip.volume_db is not None and tag == "asset-clip":
-            ET.SubElement(el, "adjust-volume", {"amount": f"{clip.volume_db:g}dB"})
+        if tag == "asset-clip":
+            volume = clip.volume_db
+            if clip.enable == "video" and info.has_audio:
+                # Resolve ignores srcEnable="video" and still brings in the recording's first
+                # audio track (the game), which then plays on top of the levelled Game track a
+                # few ms apart and sounds tinny. Muting the clip's own audio is honoured.
+                volume = MUTE_DB
+            if volume is not None:
+                ET.SubElement(el, "adjust-volume", {"amount": f"{volume:g}dB"})
         return el
+
+
+MUTE_DB = -96.0
 
 
 def write(tl: Timeline, dest: Path, event: str = "KDPlays") -> Path:
