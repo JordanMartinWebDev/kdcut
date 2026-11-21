@@ -70,6 +70,10 @@ class PixabayTests(unittest.TestCase):
         self.assertEqual(music.parse_name("alexgrohl-happy-day-185750"), ("Happy Day", "alexgrohl"))
         self.assertEqual(music.parse_name("ES_Flying Over Hills - Hallman"), ("Flying Over Hills", "Hallman"))
         self.assertEqual(music.parse_name("my-song"), ("my-song", ""))
+        self.assertEqual(music.parse_name("51383504-pallet-town-pokemon-red-amp-blue-lofi-410591"),
+                         ("Pallet Town Pokemon Red & Blue Lofi", "51383504"))
+        self.assertEqual(music.parse_name("51383504-feora-zeldax27s-lullaby-legend-of-zelda-lofi-421675")[0],
+                         "Feora Zelda's Lullaby Legend Of Zelda Lofi")
 
     def test_genre_only_track_is_music_unless_epidemic(self):
         self.assertFalse(music.looks_like_sfx("x", 150, "Pop", "", "", [], epidemic=False))
