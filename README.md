@@ -203,6 +203,12 @@ the cold open. Epidemic files carry their mood, energy, genre and tempo inside t
 reads those, so the AI knows "Peaceful, low energy" from "Dark, suspense". For music from elsewhere,
 mood subfolders (`Calm`, `Tense`, `Upbeat`, `Funny`) do the same job.
 
+**Primary music** (Settings → Music) is music to use first: tracks in these folders are picked
+before anything else, for the episode's music, long sections, beat-cut montages and Shorts. The
+rest of the library is the fallback, used only where no primary track fits or the primary ones
+have already played in that episode. The default primary folder is `~/Downloads/New Editing Music`;
+a missing primary folder is simply skipped.
+
 **Feel** (Settings → Music) decides what the AI may pick from. **Let the AI choose** (the default)
 offers the whole library and asks for whatever makes the video most entertaining; each track is
 labelled bright, scary or somber so one friendly tag can't fool it. **Upbeat only**, **Chill** and

@@ -67,6 +67,8 @@ DEFAULTS: dict[str, Any] = {
     "music": {
         "enabled": True,
         "folders": [],             # your licensed music (e.g. Epidemic Sound downloads)
+        # Music used first: picked before anything in `folders`, which becomes the fallback.
+        "primary_folders": ["~/Downloads/New Editing Music"],
         "volume_db": -20,          # background level; voice stays on top
         "duck": True,              # dip the music while you talk
         "vibe": "open",            # open: whole library, the AI picks what entertains most | upbeat | chill | any

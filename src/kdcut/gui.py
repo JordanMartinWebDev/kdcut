@@ -421,6 +421,20 @@ class SettingsDialog(QDialog):
         self.music_dirs.setMinimumHeight(60)
         for d in cfg["music"].get("folders", []):
             self.music_dirs.addItem(d)
+        self.music_primary = QListWidget()
+        self.music_primary.setMinimumHeight(44)
+        for d in cfg["music"].get("primary_folders", []):
+            self.music_primary.addItem(d)
+        padd = QPushButton("Add primary folder…")
+        padd.setToolTip("Music in these folders is used first; the folders below are the fallback")
+        prem = QPushButton("Remove")
+        padd.clicked.connect(self.add_primary_dir)
+        prem.clicked.connect(lambda: [self.music_primary.takeItem(self.music_primary.row(i))
+                                      for i in self.music_primary.selectedItems()])
+        prow = QHBoxLayout()
+        prow.addWidget(padd)
+        prow.addWidget(prem)
+        prow.addStretch(1)
         madd = QPushButton("Add folder…")
         mrem = QPushButton("Remove")
         madd.clicked.connect(self.add_music_dir)
@@ -461,6 +475,10 @@ class SettingsDialog(QDialog):
         mon.addWidget(self.music_duck)
         mon.addStretch(1)
         mbox2.addLayout(mon)
+        mbox2.addWidget(label("Primary music (used first)", "hint"))
+        mbox2.addWidget(self.music_primary)
+        mbox2.addLayout(prow)
+        mbox2.addWidget(label("Rest of the library (used when nothing primary fits)", "hint"))
         mbox2.addWidget(self.music_dirs)
         mbox2.addLayout(mrow)
         mbox2.addWidget(label("Only music you're licensed to use, e.g. your Epidemic Sound downloads "
@@ -588,7 +606,8 @@ class SettingsDialog(QDialog):
     def check_music(self):
         from kdcut import music
         folders = [self.music_dirs.item(i).text() for i in range(self.music_dirs.count())]
-        if not folders:
+        primary = [self.music_primary.item(i).text() for i in range(self.music_primary.count())]
+        if not folders and not primary:
             QMessageBox.information(self, APP_NAME, "Add a music folder first.")
             return
         self.music_check_btn.setEnabled(False)
@@ -614,7 +633,13 @@ class SettingsDialog(QDialog):
             dlg.exec()
 
         self._connect_once(done, lambda e: (finish(), QMessageBox.warning(self, APP_NAME, str(e))))
-        run_in_thread(self.bridge, lambda: music.report(music.scan_library(folders, log=lambda m: None)))
+        run_in_thread(self.bridge, lambda: music.report(music.scan_library(folders, log=lambda m: None, primary=primary)))
+
+    def add_primary_dir(self):
+        d = QFileDialog.getExistingDirectory(self, "Choose a primary music folder")
+        existing = [self.music_primary.item(i).text() for i in range(self.music_primary.count())]
+        if d and str(Path(d)) not in existing:
+            self.music_primary.addItem(str(Path(d)))
 
     def add_music_dir(self):
         d = QFileDialog.getExistingDirectory(self, "Choose a music folder")
@@ -812,6 +837,7 @@ class SettingsDialog(QDialog):
         m = s.setdefault("music", {})
         m["enabled"] = self.music_on.isChecked()
         m["folders"] = [self.music_dirs.item(i).text() for i in range(self.music_dirs.count())]
+        m["primary_folders"] = [self.music_primary.item(i).text() for i in range(self.music_primary.count())]
         m["volume_db"] = self.music_vol.currentData()
         m["duck"] = self.music_duck.isChecked()
         m["vibe"] = self.music_vibe.currentData()

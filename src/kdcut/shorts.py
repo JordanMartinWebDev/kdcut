@@ -379,7 +379,7 @@ def pick_track(library: list, total: float, seed: str, history: dict | None = No
 
     def rank(t):
         e = music.energy_level(t) or 2
-        return (hist.get(t.path, 0) >= week, t.duration < total * 0.8, -e)
+        return (not getattr(t, "primary", False), hist.get(t.path, 0) >= week, t.duration < total * 0.8, -e)
 
     best = sorted(offered, key=rank)
     top = [t for t in best if rank(t) == rank(best[0])][:8]
@@ -639,9 +639,9 @@ def make(out: Path, cfg: dict, video: dict, short: ShortFiles, use_ai: bool = Tr
 
     bed, track = None, None
     mcfg = cfg.get("music", {})
-    if scfg.get("music", True) and mcfg.get("enabled", True) and mcfg.get("folders"):
+    if scfg.get("music", True) and mcfg.get("enabled", True) and (mcfg.get("folders") or mcfg.get("primary_folders")):
         try:
-            lib = music.scan_library(mcfg["folders"], log=log)
+            lib = music.scan_library(mcfg.get("folders", []), log=log, primary=mcfg.get("primary_folders", []))
             track = pick_track(lib.music, p.total, video.get("title", "") + str(short.timelapses),
                                music.load_history())
         except Exception as exc:

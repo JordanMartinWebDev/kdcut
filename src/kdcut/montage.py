@@ -576,9 +576,12 @@ def render(plan: Plan, rec: Path, game_stream: int | None, dest: Path, fps, widt
 
 def pick_song(tracks: list, history: dict, seed: int = 0, used: set[str] = frozenset()):
     """An upbeat song with a steady beat: high or medium energy, a BPM tag of 90-150 if possible,
-    not used recently."""
+    not used recently. Primary (new) music comes first, until each primary song has had a
+    montage in this episode."""
     import time
     week = time.time() - 7 * 86400
+    fresh_primary = [t for t in tracks if getattr(t, "primary", False) and t.path not in used]
+    tracks = fresh_primary or tracks
 
     def score(t):
         bpm = _bpm(getattr(t, "bpm", ""))
