@@ -38,6 +38,7 @@ class Track:
     energy: str = ""
     bpm: str = ""
     sfx: bool = False        # a sound effect or ambience, not background music
+    primary: bool = False    # from a primary folder: picked before the rest of the library
 
     @property
     def name(self) -> str:
@@ -151,9 +152,21 @@ class Library:
     duplicates: list[str] = field(default_factory=list)   # extra copies that were ignored
 
 
-def scan_library(folders: list[str | Path], cache_file: Path | None = None, log=print) -> Library:
+def _under(path: Path, roots: list[Path]) -> bool:
+    for r in roots:
+        try:
+            path.relative_to(r)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def scan_library(folders: list[str | Path], cache_file: Path | None = None, log=print,
+                 primary: list[str | Path] = ()) -> Library:
     """Index music folders: background music, sound effects, and duplicate copies.
-    Tags and durations are cached so re-scans are instant."""
+    Tracks in `primary` folders are marked primary: the edit uses them first and falls back to
+    the rest. Tags and durations are cached so re-scans are instant."""
     cache_file = cache_file or (HOME_DIR / "music_index.json")
     cached: dict[str, dict] = {}
     if cache_file.is_file():
@@ -164,19 +177,27 @@ def scan_library(folders: list[str | Path], cache_file: Path | None = None, log=
         except (OSError, json.JSONDecodeError, KeyError, TypeError):
             cached = {}
     found: list[Track] = []
-    for folder in folders:
-        root = Path(folder).expanduser()
+    primary_roots = [Path(f).expanduser() for f in primary if str(f).strip()]
+    primary_roots = [r for r in primary_roots if r.is_dir()]
+    seen_files: set[str] = set()
+    roots: list[tuple[Path, bool]] = [(r, True) for r in primary_roots]
+    roots += [(Path(f).expanduser(), False) for f in folders]
+    for root, is_primary in roots:
         if not root.is_dir():
             log(f"Music folder not found: {root}")
             continue
         for p in sorted(root.rglob("*")):
             if not p.is_file() or p.suffix.lower() not in MUSIC_EXTS or p.name.startswith("._"):
                 continue
+            if str(p) in seen_files:           # a primary folder inside a regular one
+                continue
+            seen_files.add(str(p))
+            prim = is_primary or _under(p, primary_roots)
             mtime = int(p.stat().st_mtime)
             c = cached.get(str(p))
             if c and c.get("mtime") == mtime:
                 try:
-                    found.append(Track(**c))
+                    found.append(Track(**{**c, "primary": prim}))
                     continue
                 except TypeError:
                     pass
@@ -195,7 +216,7 @@ def scan_library(folders: list[str | Path], cache_file: Path | None = None, log=
             bpm = (t.get("tbpm") or t.get("bpm") or "").strip()
             sfx = looks_like_sfx(artist, info.duration, genre, mood, bpm, folders_)
             found.append(Track(str(p), title, artist, folders_, round(info.duration, 1), mtime,
-                               genre, mood, energy, bpm, sfx))
+                               genre, mood, energy, bpm, sfx, prim))
     try:
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         cache_file.write_text(json.dumps({"version": INDEX_VERSION, "tracks": [asdict(t) for t in found]}),
@@ -211,6 +232,7 @@ def scan_library(folders: list[str | Path], cache_file: Path | None = None, log=
     for copies in groups.values():
         copies.sort(key=lambda t: _copy_rank(t.path))
         keep = copies[0]
+        keep.primary = any(c.primary for c in copies)   # the same song in both: it's new music
         lib.duplicates += [c.path for c in copies[1:]]
         (lib.sfx if keep.sfx else lib.music).append(keep)
     order = {t.path: i for i, t in enumerate(found)}
@@ -219,9 +241,19 @@ def scan_library(folders: list[str | Path], cache_file: Path | None = None, log=
     return lib
 
 
-def scan(folders: list[str | Path], cache_file: Path | None = None, log=print) -> list[Track]:
+def scan(folders: list[str | Path], cache_file: Path | None = None, log=print,
+         primary: list[str | Path] = ()) -> list[Track]:
     """Just the background music (sound effects and duplicate copies left out)."""
-    return scan_library(folders, cache_file, log).music
+    return scan_library(folders, cache_file, log, primary).music
+
+
+def primary_first(tracks: list[Track]) -> list[Track]:
+    """Primary tracks if there are any, otherwise everything: where nothing is AI-picked."""
+    return [t for t in tracks if t.primary] or list(tracks)
+
+
+def split_primary(tracks: list[Track]) -> tuple[list[Track], list[Track]]:
+    return [t for t in tracks if t.primary], [t for t in tracks if not t.primary]
 
 
 def sfx_assets(sfx: list[Track]) -> list:
@@ -265,7 +297,7 @@ def library_text(tracks: list[Track], history: dict[str, float], limit: int = 15
     track's overall feel (bright / scary / somber) so the AI isn't fooled by one friendly tag."""
     week = time.time() - 7 * 86400
     lines = []
-    for t in sorted(tracks, key=lambda x: not tagged(x))[:limit]:     # untagged last
+    for t in sorted(tracks, key=lambda x: (not x.primary, not tagged(x)))[:limit]:   # primary first, untagged last
         about = [", ".join(t.tags)] if t.tags else []
         if t.mood:
             about.append(t.mood)
@@ -393,6 +425,7 @@ def guard_special(cues: list[tuple], offered: list[Track], special: list[Track],
             keep = [x for x in tracks[1:] if x.path not in special_paths]
             if not keep:
                 pool = [x for x in offered if x.path not in used] or offered
+                pool = primary_first(pool)
                 fresh = [x for x in pool if history.get(x.path, 0) < week] or pool
                 keep = _similar(tracks[0], fresh)[:1] if fresh else []
             if keep:
@@ -426,6 +459,8 @@ def fill(cues: list[Cue], library: list[Track], history: dict[str, float],
                 pool = [x for x in library if x.path not in used and (prev is None or x.path != prev.path)
                         and feel(x) == mood]
                 same = [x for x in library if feel(x) == mood]
+                # New (primary) music first; the rest of the library only when it runs out.
+                pool = primary_first(pool) if pool else pool
                 fresh = [x for x in pool if history.get(x.path, 0) < week] or pool or same or library
                 ranked = _similar(prev or cue.tracks[0], fresh)[:5]
                 queue = [rng.choice(ranked)] if ranked else []
@@ -499,6 +534,26 @@ RULES = (
     "out where silence is stronger (a scary moment, a big reveal, an emotional beat). Avoid "
     "tracks marked (used recently) so episodes don't all sound the same."
 )
+
+
+PRIMARY_RULES = (
+    "The library is split in two. Pick from the PRIMARY list first: it's the creator's new "
+    "music and should carry the episode. Use the rest of the library only where no primary "
+    "track fits the moment, or once the primary tracks that fit have been used in this episode. "
+    "A primary track marked (used recently) still beats a fallback track. "
+)
+
+
+def primary_text(offered: list[Track], history: dict[str, float], show_feel: bool = False) -> str:
+    """The AI's library listing, primary music first under its own heading."""
+    first, rest = split_primary(offered)
+    if not first:
+        return library_text(offered, history, show_feel=show_feel)
+    text = "PRIMARY (pick from these first):\n" + library_text(first, history, show_feel=show_feel)
+    if rest:
+        text += ("\n\nRest of the library (only when no primary track fits):\n"
+                 + library_text(rest, history, show_feel=show_feel))
+    return text
 
 
 # --------------------------------------------------------------------------------------
@@ -578,7 +633,9 @@ SEARCH_TIPS = {
 def report(lib: Library) -> str:
     rows, untagged = coverage(lib)
     mark = {"good": "OK  ", "thin": "THIN", "missing": "NEED"}
-    out = [f"{len(lib.music)} music tracks, {len(lib.sfx)} sound effects"
+    n_primary = sum(1 for t in lib.music if t.primary)
+    out = [f"{len(lib.music)} music tracks"
+           + (f" ({n_primary} primary, used first)" if n_primary else "") + f", {len(lib.sfx)} sound effects"
            + (f", {len(lib.duplicates)} duplicate copies ignored" if lib.duplicates else ""), ""]
     for c in rows:
         out.append(f"{mark[c.status]}  {c.mood:<10} {len(c.tracks):>3}  ({c.use})")

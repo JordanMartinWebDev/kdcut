@@ -153,11 +153,13 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     # Music folders: background music, plus any sound effects that live in there too.
     mcfg = cfg.get("music", {})
     library: list[music.Track] = []
-    if mcfg.get("folders"):
-        lib = music.scan_library(mcfg["folders"], log=r.log)
+    if mcfg.get("folders") or mcfg.get("primary_folders"):
+        lib = music.scan_library(mcfg.get("folders", []), log=r.log, primary=mcfg.get("primary_folders", []))
         if mcfg.get("enabled", True) and video.get("music", True):
             library = lib.music
-            r.log(f"Music library: {len(library)} track(s)")
+            n_primary = sum(1 for t in library if t.primary)
+            r.log(f"Music library: {len(library)} track(s)"
+                  + (f", {n_primary} primary (used first)" if n_primary else ""))
         if lib.sfx:
             index = AssetIndex((index.assets if index else []) + music.sfx_assets(lib.sfx))
             r.log(f"{len(lib.sfx)} sound effect(s) from the music folders added to the SFX choices")
@@ -387,8 +389,11 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
     # songs (upbeat also low-energy ones) and keep scary tracks for scary moments.
     vibe = str(mcfg.get("vibe", "open"))
     offered, scary = music.for_vibe(library, vibe)
-    library_text = music.library_text(offered, history, show_feel=vibe == "open") if offered else ""
+    library_text = music.primary_text(offered, history, show_feel=vibe == "open") if offered else ""
     music_rules = music.OPEN_RULES if vibe == "open" else music.RULES
+    primary_sig = sorted(t.path for t in offered if t.primary)
+    if primary_sig:
+        music_rules = music.PRIMARY_RULES + music_rules
     if scary and library_text:
         library_text += ("\n\nScary or big moments only (the deep dark, being hunted, very low health, "
                          "big fights and chases):\n"
@@ -405,6 +410,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
                 and cached.pop("_music_requested", False) == bool(library)
                 and cached.pop("_rules", 0) == metadata.RULES_VERSION
                 and cached.pop("_vibe", "upbeat") == vibe
+                and cached.pop("_primary", []) == primary_sig
                 and md_file.stat().st_mtime >= plan_file.stat().st_mtime):
             md = metadata.Metadata(**cached)
         else:
@@ -415,7 +421,8 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
                                        music_rules=music_rules)
                 md_file.write_text(json.dumps({**md.__dict__, "_cold_open_requested": want_cold_open,
                                                "_music_requested": bool(library),
-                                               "_rules": metadata.RULES_VERSION, "_vibe": vibe},
+                                               "_rules": metadata.RULES_VERSION, "_vibe": vibe,
+                                               "_primary": primary_sig},
                                               indent=2, ensure_ascii=False), encoding="utf-8")
             except Exception as exc:  # packaging is a bonus; never lose the timeline over it
                 r.log(f"titles/description skipped: {exc}")
@@ -861,7 +868,7 @@ def run(project: Path, cfg: dict, use_ai: bool = True, retranscribe: bool = Fals
             raw.append((t0, tracks, c.get("why", "")))
         if not raw:   # no AI picks: one fresh track per chapter
             cue_starts = sorted({max(t, music_start) for t, _ in chapter_times} | {music_start})
-            rng_tracks = sorted(offered or library, key=lambda t: history.get(t.path, 0))
+            rng_tracks = sorted(offered or library, key=lambda t: (not t.primary, history.get(t.path, 0)))
             raw = [(s, [rng_tracks[i % len(rng_tracks)]], "") for i, s in enumerate(cue_starts)]
         raw.sort(key=lambda x: x[0])
         # Talking on the finished timeline (also used for ducking below).
