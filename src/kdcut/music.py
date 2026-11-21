@@ -114,11 +114,19 @@ def for_vibe(library: list["Track"], vibe: str = "upbeat") -> tuple[list["Track"
     return offered, scary
 
 
-INDEX_VERSION = 2
+INDEX_VERSION = 3
+
+# Pixabay downloads: 'username-song-title-123456' (the number is Pixabay's track id).
+PIXABAY_NAME = re.compile(r"^([A-Za-z0-9_.]+)-(.+?)-(\d{5,})$")
 
 
 def parse_name(stem: str) -> tuple[str, str]:
-    """'ES_Flying Over Hills - Hallman' -> ('Flying Over Hills', 'Hallman')."""
+    """'ES_Flying Over Hills - Hallman' -> ('Flying Over Hills', 'Hallman').
+    'alexgrohl-happy-day-185750' (Pixabay) -> ('Happy Day', 'alexgrohl')."""
+    m = PIXABAY_NAME.match(stem.strip())
+    if m and " " not in stem:
+        title = m.group(2).replace("-", " ").replace("_", " ").strip()
+        return title.title(), m.group(1)
     s = re.sub(r"^ES[_ ]+", "", stem).strip()
     s = re.sub(r"\s*\((?:\d+|instrumental version|main version)\)$", "", s, flags=re.I)
     s = re.sub(r"(?<=\S)\(\d+\)$", "", s).strip()          # 'Beater Head(1)'
@@ -128,14 +136,17 @@ def parse_name(stem: str) -> tuple[str, str]:
     return s.replace("_", " ").strip(), ""
 
 
-def looks_like_sfx(artist: str, duration: float, genre: str, mood: str, bpm: str, folders: list[str]) -> bool:
+def looks_like_sfx(artist: str, duration: float, genre: str, mood: str, bpm: str, folders: list[str],
+                   epidemic: bool = True) -> bool:
     """Epidemic sound effects are credited to 'SFX Producer' and carry no mood or tempo.
-    Short clips are stingers/effects too. Anything in a folder called SFX counts."""
+    Short clips are stingers/effects too. Anything in a folder called SFX counts.
+    The 'genre but no mood or tempo' rule is Epidemic's: music from elsewhere (Pixabay) often
+    has a genre and nothing else, and is still music."""
     if "sfx" in artist.lower() or any(re.search(r"\b(sfx|sound ?effects?|foley)\b", f.lower()) for f in folders):
         return True
     if duration < 20:
         return True
-    return bool(genre) and not mood and not bpm     # e.g. 'Land Birds' ambience
+    return epidemic and bool(genre) and not mood and not bpm     # e.g. 'Land Birds' ambience
 
 
 def _copy_rank(path: str) -> tuple[int, int, str]:
@@ -214,7 +225,8 @@ def scan_library(folders: list[str | Path], cache_file: Path | None = None, log=
             mood = (t.get("grouping") or t.get("tit1") or t.get("mood") or "").strip()
             energy = (t.get("tit3") or t.get("energy") or "").strip()
             bpm = (t.get("tbpm") or t.get("bpm") or "").strip()
-            sfx = looks_like_sfx(artist, info.duration, genre, mood, bpm, folders_)
+            sfx = looks_like_sfx(artist, info.duration, genre, mood, bpm, folders_,
+                                 epidemic=p.stem.upper().startswith("ES_"))
             found.append(Track(str(p), title, artist, folders_, round(info.duration, 1), mtime,
                                genre, mood, energy, bpm, sfx, prim))
     try:
@@ -309,7 +321,10 @@ def library_text(tracks: list[Track], history: dict[str, float], limit: int = 15
             about.append(f"{t.bpm} bpm")
         if show_feel and tagged(t):
             about.append(f"feel: {feel(t)}")
-        desc = f" [{'; '.join(about)}]" if about else " [no mood tags]"
+        if about:
+            desc = f" [{'; '.join(about)}]"
+        else:
+            desc = " [no tags: judge it by its name]" if t.primary else " [no mood tags]"
         recent = " (used recently)" if history.get(t.path, 0) > week else ""
         lines.append(f"- {t.name}{desc} {int(t.duration // 60)}:{int(t.duration % 60):02d}{recent}")
     return "\n".join(lines)
@@ -541,6 +556,9 @@ PRIMARY_RULES = (
     "music and should carry the episode. Use the rest of the library only where no primary "
     "track fits the moment, or once the primary tracks that fit have been used in this episode. "
     "A primary track marked (used recently) still beats a fallback track. "
+    "Primary tracks often have no mood tags (they're not from Epidemic): judge those by their "
+    "names, which usually say the mood ('Happy Day', 'Epic Adventure', 'Lofi Chill'), and don't "
+    "pass them over just because they're untagged. "
 )
 
 

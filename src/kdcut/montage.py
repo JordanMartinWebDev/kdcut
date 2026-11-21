@@ -580,7 +580,10 @@ def pick_song(tracks: list, history: dict, seed: int = 0, used: set[str] = froze
     montage in this episode."""
     import time
     week = time.time() - 7 * 86400
-    fresh_primary = [t for t in tracks if getattr(t, "primary", False) and t.path not in used]
+    from kdcut.music import energy_level
+    # A calm-sounding primary track (piano, lofi, ambient) makes a poor beat-cut montage.
+    fresh_primary = [t for t in tracks if getattr(t, "primary", False) and t.path not in used
+                     and energy_level(t) != 1]
     tracks = fresh_primary or tracks
 
     def score(t):
